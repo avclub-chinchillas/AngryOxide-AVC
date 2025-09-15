@@ -1,6 +1,4 @@
-# AngryOxide 😡
-
-![Logo](death.png)
+# AngryOxide 😡 AVClub Version
 
 ### A 802.11 Attack tool built in Rust 🦀 !
 
@@ -8,24 +6,12 @@
 
 **This tool is for research purposes only. I am not responsible for anything you do or damage you cause while using AngryOxide. Only use against networks that you have permission.**
 
-AngryOxide was developed as a way to learn Rust, netlink, kernel sockets, and WiFi exploitation all at once.
-
 You can get information about how to use AngryOxide in the [User Guide](https://github.com/Ragnt/AngryOxide/wiki/1.-User-Guide).
-
-NOTE: This project is under HEAVY development and you can expect a very fast release cycle.
-
-The overall goal of this tool is to provide a single-interface survey capability with advanced automated attacks that result in valid hashlines you can crack with [Hashcat](https://hashcat.net/hashcat/).
-
-This tool is heavily inspired by [hcxdumptool](https://github.com/ZerBea/hcxdumptool) and development wouldn't have been possible without help from ZerBea.
-
-If you have questions or any issues, you can reach me on the [AngryOxide Discord](https://discord.gg/QsEgaFndsQ)
 
 ## I wanna use it!
 
-You can download pre-compiled binaries of AngryOxide in the [releases](https://github.com/Ragnt/AngryOxide/releases/latest).
-
+Clone this repository.
 ```bash
-tar -xf angryoxide-linux-x86_64.tar.gz # Untar
 chmod +x install.sh # Make executable
 sudo ./install.sh # Install (as root, including zsh/bash completions)
 ```
@@ -129,40 +115,6 @@ Attacks:
       --disable-disassoc  Optional - Do NOT send disassociation attacks
       --disable-roguem2   Optional - Do NOT attempt rogue M2 collection
 ```
-
-## Building from source
-
-If you want to build from source instead of using precompiled binaries, these are the basic instructions:
-
-```
-# Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Clone this repo
-git clone --recurse-submodules https://github.com/Ragnt/AngryOxide.git
-
-# Build/Install
-cd AngryOxide
-make
-sudo make install
-```
-
-This will build from source, install into /usr/bin/angryoxide, and install the bash completions for you.
-
-### Cross compiling:
-
-I use [cross](https://github.com/cross-rs/cross) to cross compile to embedded architectures.
-
-Here is MIPS (mips-unknown-linux-musl) as an example.
-
-```
-# make sure you have the nightly installed
-rustup install nightly
-
-# dynamically linked & soft-float
-cross build +nightly --target mips-unknown-linux-musl --release -Zbuild-std
-```
-
 
 ### Completions script:
 

@@ -1,9 +1,14 @@
 #!/bin/bash
 
-count=`ls -1 *.hc22000 2>/dev/null | wc -l`
-if [ $count != 0 ]
-then 
-echo $count "hash file(s) found." 
-else
-echo "No hash files."
-fi
+#!/bin/bash
+
+declare -a hash_files=()
+
+for file in *.hc22000; do
+    if [[ -f "$file" && ! " ${hash_files[@]} " =~ " $file " ]]; then
+        hash_files+=("$file")
+    fi
+done
+
+echo "[*] Unique hash files found: ${hash_files[@]}"
+echo "[*] Count of unique hash files: ${#hash_files[@]}"
