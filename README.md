@@ -1,6 +1,6 @@
 # AngryOxide 😡 AVClub Version
 
-### A 802.11 Attack tool built in Rust 🦀 !
+### A 802.11 Attack tool built in Rust 🦀 - Now with macOS support! 🍎
 
 [![Builds and Release](https://github.com/Ragnt/AngryOxide/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Ragnt/AngryOxide/actions/workflows/ci.yml) ![GitHub commit activity](https://img.shields.io/github/commit-activity/m/Ragnt/AngryOxide) [![Discord](https://img.shields.io/discord/1194365883099922643)](https://discord.gg/QsEgaFndsQ)
 
@@ -8,13 +8,52 @@
 
 You can get information about how to use AngryOxide in the [User Guide](https://github.com/Ragnt/AngryOxide/wiki/1.-User-Guide).
 
+NOTE: This project is under HEAVY development and you can expect a very fast release cycle.
+
+### Quick Compatibility Check
+
+**Linux**: Full support on all distributions with nl80211 drivers
+**macOS**: Supported with limitations - see [Platform Support](#platform-support) section
+**Windows**: Not supported (use WSL2 with USB passthrough)
+
+The overall goal of this tool is to provide a single-interface survey capability with advanced automated attacks that result in valid hashlines you can crack with [Hashcat](https://hashcat.net/hashcat/).
+
+This tool is heavily inspired by [hcxdumptool](https://github.com/ZerBea/hcxdumptool) and development wouldn't have been possible without help from ZerBea.
+
+If you have questions or any issues, you can reach me on the [AngryOxide Discord](https://discord.gg/QsEgaFndsQ)
+
 ## I wanna use it!
 
-Clone this repository.
+You can download pre-compiled binaries of AngryOxide in the [releases](https://github.com/Ragnt/AngryOxide/releases/latest).
+
+### Linux Installation
+
 ```bash
 chmod +x install.sh # Make executable
 sudo ./install.sh # Install (as root, including zsh/bash completions)
 ```
+
+### macOS Installation
+
+```bash
+# For Intel Macs
+tar -xf angryoxide-macos-x86_64.tar.gz
+
+# For Apple Silicon (M1/M2/M3)
+tar -xf angryoxide-macos-aarch64.tar.gz
+
+# Or use the universal binary (works on all Macs)
+tar -xf angryoxide-macos-universal.tar.gz
+
+chmod +x install.sh
+sudo ./install.sh # Install (as root, including zsh/bash completions)
+```
+
+**macOS Requirements:**
+- macOS 10.14 (Mojave) or later
+- Admin/root privileges for monitor mode
+- Wireless Diagnostics or tcpdump (included with macOS)
+- Optional: Disable SIP for some features (MAC spoofing)
 
 You can get information about how to use AngryOxide in the [User Guide](https://github.com/Ragnt/AngryOxide/wiki/1.-User-Guide).
 
@@ -23,6 +62,14 @@ You can get information about how to use AngryOxide in the [User Guide](https://
 ```bash
 sudo ./install.sh uninstall # Uninstall
 ```
+
+## Platform Support
+
+| Platform | Architecture | Monitor Mode | Packet Injection | Status |
+|----------|-------------|--------------|------------------|--------|
+| Linux | x86_64, ARM, MIPS | ✅ Full | ✅ Full | Stable |
+| macOS | Intel (x86_64) | ✅ Full | ✅ Hardware-dependent | Stable |
+| macOS | Apple Silicon (M1/M2/M3) | ⚠️ Limited | ❌ Not supported | Beta |
 
 ## Features
 
@@ -66,7 +113,7 @@ Does awesome things... with wifi.
 Usage: angryoxide [OPTIONS] --interface <INTERFACE>
 
 Options:
-  -i, --interface <INTERFACE>     Interface to use
+  -i, --interface <INTERFACE>     Interface to use (e.g., wlan0 on Linux, en0 on macOS)
   -c, --channel <CHANNEL>         Optional - Channel to scan. Will use "-c 1,6,11" if none specified
   -b, --band <2 | 5 | 6 | 60>     Optional - Entire band to scan - will include all channels interface can support
   -o, --output <Output Filename>  Optional - Output filename
@@ -86,7 +133,7 @@ Targeting:
 Advanced Options:
   -r, --rate <Attack Rate>            Optional - Attack rate (1, 2, 3 || 3 is most aggressive) [default: 2]
       --combine                       Optional - Combine all hc22000 files into one large file for bulk processing
-      --noactive                      Optional - Disable Active Monitor mode
+      --active                        Optional - Use Active Monitor mode - WARNING, may cause bugs.
       --rogue <MAC Address>           Optional - Tx MAC for rogue-based attacks - will randomize if excluded
       --gpsd <GPSD Host:Port>         Optional - Alter default HOST:Port for GPSD connection [default: 127.0.0.1:2947]
       --autohunt                      Optional - AO will auto-hunt all channels then lock in on the ones targets are on
@@ -116,9 +163,122 @@ Attacks:
       --disable-roguem2   Optional - Do NOT attempt rogue M2 collection
 ```
 
+## Building from source
+
+If you want to build from source instead of using precompiled binaries, these are the basic instructions:
+
+### Linux
+
+```bash
+# Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Clone this repo
+git clone --recurse-submodules https://github.com/Ragnt/AngryOxide.git
+
+# Build/Install
+cd AngryOxide
+make
+sudo make install
+```
+
+### macOS
+
+```bash
+# Install Rust (if not already installed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Install Xcode Command Line Tools (if not already installed)
+xcode-select --install
+
+# Clone this repo
+git clone --recurse-submodules https://github.com/Ragnt/AngryOxide.git
+
+# Build/Install
+cd AngryOxide
+cargo build --release
+sudo cp target/release/angryoxide /usr/local/bin/
+sudo cp completions/_angryoxide /usr/local/share/zsh/site-functions/ # Zsh completions
+```
+
+This will build from source, install into /usr/bin/angryoxide, and install the bash completions for you.
+
+### Cross compiling:
+
+I use [cross](https://github.com/cross-rs/cross) to cross compile to embedded architectures.
+
+Here is MIPS (mips-unknown-linux-musl) as an example.
+
+```
+# make sure you have the nightly installed
+rustup install nightly
+
+# dynamically linked & soft-float
+cross build +nightly --target mips-unknown-linux-musl --release -Zbuild-std
+```
+
+
+## macOS-Specific Notes
+
+### Monitor Mode
+
+AngryOxide supports multiple methods for monitor mode on macOS:
+
+1. **Airport Utility** (older macOS versions)
+   - Built-in support for monitor mode
+   - Best compatibility on macOS 10.14-11.x
+
+2. **tcpdump** (modern macOS versions)
+   - Fallback method for macOS 12+
+   - Automatically used when Airport is unavailable
+   - Requires channel restart for switching
+
+### Known Limitations on macOS
+
+- **Apple Silicon (M1/M2/M3)**: Limited monitor mode support, no packet injection
+- **Channel Hopping**: May be slower with tcpdump method
+- **MAC Spoofing**: Requires SIP (System Integrity Protection) to be partially disabled
+- **Active Monitor**: Not supported (cannot be associated while in monitor mode)
+
+### Recommended Hardware for macOS
+
+For best results on macOS, consider using:
+
+1. **Intel-based Macs (pre-2020)** - Full monitor mode and injection support
+2. **External USB WiFi Adapters** - Better compatibility:
+   - Alfa AWUS036ACH (RTL8812AU chipset)
+   - Alfa AWUS036ACM (MT7612U chipset)
+   - Any adapter with RTL8812AU/BU or MT7612U chipset
+3. **Older MacBooks (2012-2019)** - Native Broadcom chips with good support
+
+### Troubleshooting macOS Issues
+
+**"Operation not permitted" error:**
+```bash
+# Ensure you're running with sudo
+sudo angryoxide -i en0
+```
+
+**Monitor mode not working:**
+```bash
+# Check if your hardware supports monitor mode
+sudo tcpdump -I -i en0 -c 1
+
+# Try using a different interface (en1, en2, etc.)
+ifconfig -l  # List all interfaces
+```
+
+**Channel switching issues:**
+```bash
+# Manually disassociate first
+sudo /System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -z
+```
+
 ### Completions script:
 
 These make using AngryOxide with bash and zsh a bit more fluid, automatically finding your wireless interfaces for you and showing you the arguments in a tab-completable way.
+
+**Note for macOS users:** Completions work with both the default zsh shell and bash if installed via Homebrew.
 
 ## Screenshots!
 
