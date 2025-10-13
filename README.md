@@ -1,12 +1,14 @@
 # AngryOxide 😡 AVClub Version
 
-### A 802.11 Attack tool built in Rust 🦀
+### A 802.11 Attack Tool
 
-**This tool is for research purposes only. I am not responsible for anything you do or damage you cause while using AngryOxide. Only use against networks that you have permission.**
+**This tool is for research purposes only. I am not responsible for anything you do or damage you cause. Only use against networks you have permission to test.**
 
-You can get information about how to use AngryOxide in the [User Guide](https://github.com/Ragnt/AngryOxide/wiki/1.-User-Guide).
+### Usage
 
-NOTE: This project is under HEAVY development and you can expect a very fast release cycle.
+```bash
+python3 AVC.py
+```
 
 ### Quick Compatibility Check
 
@@ -16,8 +18,8 @@ The overall goal of this tool is to provide a single-interface survey capability
 
 ## Install Requirements
 
-Clone this repo
 ```bash
+git clone https://github.com/avclub-chinchillas/AngryOxide-AVC
 chmod +x install.sh # Make executable
 sudo ./install.sh # Install
 ```
