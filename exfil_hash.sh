@@ -8,5 +8,5 @@ for file in *.hc22000; do
     fi
 done
 
-echo "[*] Unique hash files found: ${hash_files[@]}"
-echo "[*] Count of unique hash files: ${#hash_files[@]}"
+#echo "[*] Unique hash files found: ${hash_files[@]}"
+#echo "[*] Count of unique hash files: ${#hash_files[@]}"
