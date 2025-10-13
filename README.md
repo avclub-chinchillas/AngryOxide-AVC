@@ -16,17 +16,19 @@ The overall goal of this tool is to provide a single-interface survey capability
 
 ## Install Requirements
 
-1. Clone this repo
-2. 
+Clone this repo
 ```bash
 chmod +x install.sh # Make executable
-sudo ./install.sh # Install```
-3.
+sudo ./install.sh # Install
+```
+
 ```bash
-sudo apt-get install python3-kafka```
+sudo apt-get install python3-kafka
+```
 
 
 #### Uninstalling:
 
 ```bash
-sudo ./install.sh uninstall # Uninstall```
+sudo ./install.sh uninstall # Uninstall
+```
