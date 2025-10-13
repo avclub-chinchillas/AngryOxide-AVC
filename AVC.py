@@ -2,7 +2,8 @@ import subprocess
 import time
 import sys
 import csv
-from kafka import KafkaProducer
+import pandas as pd
+#from kafka import KafkaProducer
 
 # ======================
 # Global Configurations
@@ -13,14 +14,14 @@ WELCOME_MESSAGE = \
 + r"||     _    ___               ___     ______  ||"  + "\n"\
 + r"||    / \  / _ \             / \ \   / / ___| ||"  + "\n"\
 + r"||   / _ \| | | |  _____    / _ \ \ / / |     ||"  + " by dr0pp1n\n"\
-+ r"||  / ___ \ |_| | |_____|  / ___ \ V /| |___  ||"  + " Version 0.2a\n"\
-+ r"|| /_/   \_\___/          /_/   \_\_/  \____| ||"  + " Build 250915\n"\
++ r"||  / ___ \ |_| | |_____|  / ___ \ V /| |___  ||"  + " Version 0.3a\n"\
++ r"|| /_/   \_\___/          /_/   \_\_/  \____| ||"  + " Build 251013\n"\
 + r"||                                            ||"  + "\n"\
 + r">>============================================<<"  + "\n"\
-+ "[*] AngryOxide-AVClub 802.11 Wi-Fi Hash Farmer starting up...\n"\
++ "[*] AngryOxide-AVClub Wi-Fi Scan Tool starting up...\n"\
 + "[!] Send SIGINT (Ctrl-C) to exit.\n"
 
-EXFIL_INTERVAL = 5  # Interval in seconds to exfiltrate hashes
+EXFIL_INTERVAL = 3  # Interval in seconds to exfiltrate hashes
 
 # ======================
 # Helper Functions
@@ -28,9 +29,42 @@ EXFIL_INTERVAL = 5  # Interval in seconds to exfiltrate hashes
 
 def read_csv(file_path):
     """Reads a CSV file and returns its contents as a list of dictionaries."""
+    data = []
+    data_row = []
     with open(file_path, mode='r') as file:
-        csv_reader = csv.DictReader(file)
-        return [row for row in csv_reader]
+        csv_reader = csv.reader(file)
+        for row in csv_reader:
+            for item in row:
+                if item:  # Only add non-empty items
+                    item = item.strip()
+                    data_row.append(item)
+            if data_row:  # Only add non-empty rows
+                data.append(data_row)
+            data_row = []
+    return data
+
+def list_to_df(data):
+    """Converts a list of lists into a pandas DataFrame."""
+    if not data:
+        return pd.DataFrame()  # Return empty DataFrame if data is empty
+    headers = data[0]
+    rows = data[1:]
+    df = pd.DataFrame(rows, columns=headers)
+    return df
+    
+def transform_wifi_data(data):
+    """Transforms raw Wi-Fi data into a structured format."""
+    print(data)
+    transformed = []
+    for entry in data:
+        transformed_entry = {
+            'BSSID': entry.get('BSSID', ''),
+            'ESSID': entry.get('ESSID', ''),
+            'Channel': entry.get('channel', ''),
+            'Signal': entry.get('power', ''),
+            'Encryption': entry.get('Privacy', ''),
+            'Last Seen': entry.get('last seen', '')
+        }
 
 # ======================
 # Main Function
@@ -51,13 +85,17 @@ def main():
     print(f"[*] Started airodump-ng with PID {am2p.pid}")
 
     ### Start Kafka producer subprocess
-    producer = KafkaProducer(bootstrap_servers='localhost:9092')
-
+    #producer = KafkaProducer(bootstrap_servers='localhost:9092')
+    time.sleep(1)
     print(f"[*] Exfiltrating hashes every {EXFIL_INTERVAL} seconds...")
     while True:
         try:
             wifi_data = read_csv('airfile-01.csv')
-            producer.send('wifi_data', wifi_data)
+            #producer.send('wifi_data', wifi_data)
+            #print (transform_wifi_data(wifi_data))
+            print(wifi_data)
+            print (list_to_df(wifi_data))
+
             subprocess.run(["./exfil_hash.sh"])
             time.sleep(EXFIL_INTERVAL)
         except Exception or KeyboardInterrupt:
