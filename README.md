@@ -9,6 +9,7 @@
 ```bash
 python3 AVC.py
 ```
+Edit `whitelist.txt` to add BSSIDs to ignore.
 
 ### Quick Compatibility Check
 

