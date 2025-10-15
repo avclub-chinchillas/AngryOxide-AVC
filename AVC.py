@@ -91,7 +91,7 @@ def main():
     while True:
         try:
             wifi_data = read_csv('airfile-01.csv')
-            wifi_data list_to_df(wifi_data)
+            wifi_data = list_to_df(wifi_data)
             print (transform_wifi_data(wifi_data))
             #producer.send('wifi_data', wifi_data)
 
