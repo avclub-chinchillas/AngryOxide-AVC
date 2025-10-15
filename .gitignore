@@ -4,6 +4,7 @@
 *.pcapng
 *.kismet
 *.hc22000
+*.csv
 .claude/*
 target/*
 
