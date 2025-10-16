@@ -4,6 +4,7 @@ import sys
 import csv
 import pandas as pd
 #from kafka import KafkaProducer
+from gps_handler import read_gps
 
 # ======================
 # Global Configurations
@@ -66,15 +67,6 @@ def transform_wifi_data(data):
             'Encryption': entry.get('Privacy', ''),
             'Last Seen': entry.get('last seen', '')
         }
-
-def read_gps(filepath):
-    try:
-        with open(filepath, 'r') as gps_file:
-            gps_data = gps_file.readline().strip()
-            return gps_data
-    except Exception as e:
-        print(f"[!] Error reading GPS data: {e}")
-        return None
 
 # ======================
 # Main Function
