@@ -7,7 +7,7 @@
 
 # Select the second interface (index 1)
 #MON_INTERFACE=${result_array[1]}
-MON_INTERFACE="wlan0mon"
+MON_INTERFACE="wlan1mon"
 # Display the selected option
 #echo "Running AngryOxide on: $MON_INTERFACE"
 sudo angryoxide -i $MON_INTERFACE -c 1,2,3,4,5,6,7,8,10,11,12,13 -w whitelist.txt -r 3 --headless --notar

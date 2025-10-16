@@ -1,7 +1,4 @@
 #!/bin/bash
-rm -r oxide-*
-rm *.pcapng
-rm *.kismet
-rm *.hc22000
-rm *.tar.gz
-rm -f airfile-*.csv
+
+sudo rm -rf oxide-*
+sudo rm -f scan-*

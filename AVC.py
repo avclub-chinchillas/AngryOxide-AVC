@@ -3,6 +3,8 @@ import time
 import sys
 import csv
 import pandas as pd
+import re
+import os
 #from kafka import KafkaProducer
 from gps_handler import read_gps
 
@@ -15,45 +17,124 @@ WELCOME_MESSAGE = \
 + r"||     _    ___               ___     ______  ||"  + "\n"\
 + r"||    / \  / _ \             / \ \   / / ___| ||"  + "\n"\
 + r"||   / _ \| | | |  _____    / _ \ \ / / |     ||"  + " by dr0pp1n\n"\
-+ r"||  / ___ \ |_| | |_____|  / ___ \ V /| |___  ||"  + " Version 0.3a\n"\
-+ r"|| /_/   \_\___/          /_/   \_\_/  \____| ||"  + " Build 251013\n"\
++ r"||  / ___ \ |_| | |_____|  / ___ \ V /| |___  ||"  + " Version 0.5a\n"\
++ r"|| /_/   \_\___/          /_/   \_\_/  \____| ||"  + " Build 251016\n"\
 + r"||                                            ||"  + "\n"\
 + r">>============================================<<"  + "\n"\
 + "[*] AngryOxide-AVClub Wi-Fi Scan Tool starting up...\n"\
++ "[!] wlan0mon runs airodump-ng and wlan1mon runs AngryOxide! Ensure interfaces are started.\n"\
 + "[!] Send SIGINT (Ctrl-C) to exit.\n"
 
-EXFIL_INTERVAL = 3  # Interval in seconds to exfiltrate hashes
-GPS_DEVICE = '/dev/ttyACM0'  # GPS device path
+MODULE_INTERVAL = 5  # Interval in seconds to run attack modules
+SCAN_INTERFACE = 'wlan0mon'  # Interface for scanning Wi-Fi networks
+ATTACK_INTERFACE = 'wlan1mon'  # Interface for attacks
 
 # ======================
 # Helper Functions
 # ======================
 
-def read_csv(file_path):
-    """Reads a CSV file and returns its contents as a list of dictionaries."""
-    data = []
-    data_row = []
-    with open(file_path, mode='r') as file:
-        csv_reader = csv.reader(file)
-        for row in csv_reader:
-            for item in row:
-                if item:  # Only add non-empty items
-                    item = item.strip()
-                    data_row.append(item)
-            if data_row:  # Only add non-empty rows
-                data.append(data_row)
-            data_row = []
+def check_monitor_interfaces(timeout=0, interval=1, targets=[SCAN_INTERFACE, ATTACK_INTERFACE]):
+    """
+    Check for monitor-mode interfaces wlan0mon and wlan1mon on Linux (Ubuntu 24.04).
+    Returns a dict: {'wlan0mon': bool, 'wlan1mon': bool}.
+    If timeout>0, retry until timeout seconds elapse (interval seconds between checks).
+    """
+    deadline = time.time() + timeout if timeout and timeout > 0 else None
+
+    while True:
+        found = {iface: os.path.exists(f'/sys/class/net/{iface}') for iface in targets}
+        # if no deadline, or both found, or timeout reached -> return result
+        if deadline is None or all(found.values()) or (deadline is not None and time.time() >= deadline):
+            return found
+        time.sleep(interval)
+
+def open_csv(file_path):
+    """Opens a CSV file and returns its contents as a list of lists."""
+    with open(file_path, 'r') as file:
+        reader = csv.reader(file)
+        data = list(reader)
     return data
 
+def is_blank_row(row):
+    if row is None:
+        return True
+    if not isinstance(row, (list, tuple)):
+        return False
+    for cell in row:
+        if isinstance(cell, str):
+            if cell.strip() != '':
+                return False
+        elif cell is not None:
+            return False
+    return True
+
 def list_to_df(data):
-    """Converts a list of lists into a pandas DataFrame."""
-    if not data:
+    """Converts a list of lists into a pandas DataFrame.
+    Searches for "Station MAC in Column 2 to split DataFrames."""
+    # Remove empty/blank rows
+    clean = [row for row in data if not is_blank_row(row)]
+    if not clean:
         return pd.DataFrame()  # Return empty DataFrame if data is empty
-    headers = data[0]
-    rows = data[1:]
+    headers = clean[0]
+    rows = clean[1:]
     df = pd.DataFrame(rows, columns=headers)
     return df
-    
+
+def split_dataframe_on_marker(df, marker='Station MAC', col_index=None):
+    """
+    Split a DataFrame into two parts where a row indicates the start of a new table.
+    - If col_index is provided, checks only that column for the marker.
+    - Otherwise searches any column for the marker.
+    Returns (top_df, bottom_df). If marker not found, returns (df, empty_df).
+    """
+    if df is None or df.empty:
+        return df, pd.DataFrame()
+
+    # Try a strict check on the requested column first (if provided),
+    # then fallback to searching all columns. Comparison is whitespace-tolerant
+    # and case-insensitive, and accepts partial matches (e.g. " Station MAC ").
+    mask = pd.Series(False, index=df.index)
+
+    if col_index is not None:
+        try:
+            col = df.iloc[:, col_index].astype(str).str.strip()
+            mask = col.eq(marker) | col.str.contains(re.escape(marker), case=False, na=False)
+        except Exception:
+            mask = pd.Series(False, index=df.index)
+
+    if not mask.any():
+        # Search every column for the marker (case-insensitive, trimmed)
+        try:
+            mask = df.astype(str).apply(lambda c: c.str.strip().str.contains(re.escape(marker), case=False, na=False)).any(axis=1)
+        except Exception:
+            mask = pd.Series(False, index=df.index)
+
+    if not mask.any():
+        return df, pd.DataFrame()
+
+    # Find first matching row position
+    match_idx = mask[mask].index[0]
+    pos = df.index.get_loc(match_idx)
+
+    # The matching row is the header for the bottom table
+    header_row = df.iloc[pos].tolist()
+
+    # Top table: rows before the marker row
+    top_df = df.iloc[:pos].reset_index(drop=True)
+
+    # Bottom table: rows after the marker row; apply header_row as columns
+    bottom_df = df.iloc[pos+1:].reset_index(drop=True)
+    if not bottom_df.empty:
+        # Make header_row match number of bottom columns (pad or truncate)
+        if len(header_row) != bottom_df.shape[1]:
+            if len(header_row) < bottom_df.shape[1]:
+                header_row = header_row + [f'col{i}' for i in range(len(header_row), bottom_df.shape[1])]
+            else:
+                header_row = header_row[:bottom_df.shape[1]]
+        bottom_df.columns = [str(h).strip() for h in header_row]
+
+    return top_df, bottom_df
+
 def transform_wifi_data(data):
     """Transforms raw Wi-Fi data into a structured format."""
     print(data)
@@ -75,31 +156,39 @@ def main():
     print("[*] Cleaning up...")
     subprocess.run(["./cleanup.sh"])
 
+    print('[*] Looking for wlan0mon and wlan1mon...')
+    found = check_monitor_interfaces(timeout=3, interval=1)
+    print(f"[*] Monitor interfaces found: {found}")
+
     print("[*] Starting attack modules...")
     ### Start AngryOxide subprocess
-    #am1 = "./AgOx.sh"
-    #am1p = subprocess.Popen([am1], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    #print(f"[*] Started AngryOxide with PID {am1p.pid}")
-    
+    if found.get(ATTACK_INTERFACE):
+        print(f"[*] Starting AngryOxide on {ATTACK_INTERFACE}...")
+        angryoxide = subprocess.Popen('sudo','angryoxide','-i',ATTACK_INTERFACE,'-c','1,2,3,4,5,6,7,8,10,11,12,13','-w','whitelist.txt','-r','3','--headless','--notar',
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(f"[*] Started AngryOxide with PID {angryoxide.pid}")
+
     ### Start airodump-ng subprocess
-    am2 = "./airodump.sh"
-    am2p = subprocess.Popen([am2], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    print(f"[*] Started airodump-ng with PID {am2p.pid}")
+    if found.get(SCAN_INTERFACE):
+        print(f"[*] Starting airodump-ng on {SCAN_INTERFACE}...")
+        airodump = subprocess.Popen(['sudo','airodump-ng', SCAN_INTERFACE, '-w','scan'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        print(f"[*] Started airodump-ng with PID {airodump.pid}")
 
     ### Start Kafka producer subprocess
     #producer = KafkaProducer(bootstrap_servers='localhost:9092')
-    time.sleep(1)
-    print(f"[*] Exfiltrating hashes every {EXFIL_INTERVAL} seconds...")
     while True:
         try:
-            wifi_data = read_csv('airfile-01.csv')
+            print(f"[*] Running data scans every {MODULE_INTERVAL} seconds...")
+            time.sleep(MODULE_INTERVAL)
+            wifi_data = open_csv('scan-01.csv')
             wifi_data = list_to_df(wifi_data)
+            ap_data, station_data = split_dataframe_on_marker(wifi_data, marker='Station MAC', col_index=1)
+            print('[*] airodump AP output:\n', ap_data)
+            print('[*] airodump STA output:\n', station_data)
             #print(transform_wifi_data(wifi_data))
-            print(read_gps(GPS_DEVICE))
+            print('[*] GPS Reading: ', read_gps())
             #producer.send('wifi_data', wifi_data)
-
             subprocess.run(["./exfil_hash.sh"])
-            time.sleep(EXFIL_INTERVAL)
         except Exception or KeyboardInterrupt:
             if Exception:
                 print(f"[!] Exception occurred: {Exception}")
@@ -107,11 +196,12 @@ def main():
                 print("\n[!] SIGINT detected (Ctrl-C), shutting down gracefully...")
                 print("[*] Terminating subprocesses...")
                 #am1p.terminate()
-                am2p.terminate()
+                airodump.terminate()
 
 # ======================
 # Main Loop
 # ======================
+
 if __name__ == "__main__":
     try:
         print(WELCOME_MESSAGE)

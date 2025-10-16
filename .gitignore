@@ -5,6 +5,7 @@
 *.kismet
 *.hc22000
 *.csv
+*.cap
+*.netxml
 .claude/*
 target/*
-
