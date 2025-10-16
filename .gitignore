@@ -7,5 +7,6 @@
 *.csv
 *.cap
 *.netxml
+*.gps
 .claude/*
 target/*

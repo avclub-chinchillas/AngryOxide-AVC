@@ -5,6 +5,7 @@ import csv
 import pandas as pd
 import re
 import os
+import json
 #from kafka import KafkaProducer
 from gps_handler import read_gps
 
@@ -67,6 +68,12 @@ def is_blank_row(row):
         elif cell is not None:
             return False
     return True
+
+def open_gps(file_path):
+    """Opens a GPS JSON file and returns its contents as a list of lists."""
+    with open(file_path, 'r') as file:
+        data = json.load(file)
+    return data
 
 def list_to_df(data):
     """Converts a list of lists into a pandas DataFrame.
@@ -135,20 +142,6 @@ def split_dataframe_on_marker(df, marker='Station MAC', col_index=None):
 
     return top_df, bottom_df
 
-def transform_wifi_data(data):
-    """Transforms raw Wi-Fi data into a structured format."""
-    print(data)
-    transformed = []
-    for entry in data:
-        transformed_entry = {
-            'BSSID': entry.get('BSSID', ''),
-            'ESSID': entry.get('ESSID', ''),
-            'Channel': entry.get('channel', ''),
-            'Signal': entry.get('power', ''),
-            'Encryption': entry.get('Privacy', ''),
-            'Last Seen': entry.get('last seen', '')
-        }
-
 # ======================
 # Main Function
 # ======================
@@ -171,32 +164,38 @@ def main():
     ### Start airodump-ng subprocess
     if found.get(SCAN_INTERFACE):
         print(f"[*] Starting airodump-ng on {SCAN_INTERFACE}...")
-        airodump = subprocess.Popen(['sudo','airodump-ng', SCAN_INTERFACE, '-w','scan'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        airodump = subprocess.Popen(['sudo','airodump-ng', SCAN_INTERFACE, '--gpsd', '-w','scan'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         print(f"[*] Started airodump-ng with PID {airodump.pid}")
 
     ### Start Kafka producer subprocess
     #producer = KafkaProducer(bootstrap_servers='localhost:9092')
+
+    ### Main loop
     while True:
         try:
             print(f"[*] Running data scans every {MODULE_INTERVAL} seconds...")
             time.sleep(MODULE_INTERVAL)
             wifi_data = open_csv('scan-01.csv')
+            gps_data = open_gps('scan-01.gps')
+            print(gps_data)
             wifi_data = list_to_df(wifi_data)
             ap_data, station_data = split_dataframe_on_marker(wifi_data, marker='Station MAC', col_index=1)
             print('[*] airodump AP output:\n', ap_data)
             print('[*] airodump STA output:\n', station_data)
-            #print(transform_wifi_data(wifi_data))
             print('[*] GPS Reading: ', read_gps())
             #producer.send('wifi_data', wifi_data)
             subprocess.run(["./exfil_hash.sh"])
+
         except Exception or KeyboardInterrupt:
             if Exception:
                 print(f"[!] Exception occurred: {Exception}")
             else:
                 print("\n[!] SIGINT detected (Ctrl-C), shutting down gracefully...")
                 print("[*] Terminating subprocesses...")
-                #am1p.terminate()
-                airodump.terminate()
+                if airodump:
+                    airodump.terminate()
+                if angryoxide:
+                    angryoxide.terminate()
 
 # ======================
 # Main Loop
@@ -206,6 +205,10 @@ if __name__ == "__main__":
     try:
         print(WELCOME_MESSAGE)
         main()
-    except Exception as e:
-        print(f"[!] Fatal error: {e}")
-        sys.exit(0)
+    except Exception or KeyboardInterrupt:
+        if Exception:
+            print(f"[!] Fatal error: {Exception}")
+            sys.exit(0)
+        else:
+            print("\n[!] SIGINT detected (Ctrl-C), exiting...")
+            sys.exit(0)

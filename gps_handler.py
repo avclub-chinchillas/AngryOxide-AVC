@@ -1,9 +1,11 @@
 import gpsd
+from time import datetime
 
 def read_gps():
     try:
         gpsd.connect()
         packet = gpsd.get_current()
+        datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         if packet.mode >= 2:  # 2D fix
             latitude = packet.lat
             longitude = packet.lon
