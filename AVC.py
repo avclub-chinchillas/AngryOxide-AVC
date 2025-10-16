@@ -22,6 +22,7 @@ WELCOME_MESSAGE = \
 + "[!] Send SIGINT (Ctrl-C) to exit.\n"
 
 EXFIL_INTERVAL = 3  # Interval in seconds to exfiltrate hashes
+GPS_DEVICE = '/dev/ttyACM0'  # GPS device path
 
 # ======================
 # Helper Functions
@@ -66,6 +67,15 @@ def transform_wifi_data(data):
             'Last Seen': entry.get('last seen', '')
         }
 
+def read_gps(filepath):
+    try:
+        with open(filepath, 'r') as gps_file:
+            gps_data = gps_file.readline().strip()
+            return gps_data
+    except Exception as e:
+        print(f"[!] Error reading GPS data: {e}")
+        return None
+
 # ======================
 # Main Function
 # ======================
@@ -92,7 +102,8 @@ def main():
         try:
             wifi_data = read_csv('airfile-01.csv')
             wifi_data = list_to_df(wifi_data)
-            print (transform_wifi_data(wifi_data))
+            #print(transform_wifi_data(wifi_data))
+            print(read_gps(GPS_DEVICE))
             #producer.send('wifi_data', wifi_data)
 
             subprocess.run(["./exfil_hash.sh"])

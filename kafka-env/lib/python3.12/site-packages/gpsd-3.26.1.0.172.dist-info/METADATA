@@ -1,0 +1,56 @@
+Metadata-Version: 2.1
+Name: gpsd
+Version: 3.26.1.0.172
+Summary: "fork of gps module from gpsd."
+Home-page: https://gpsd.io/
+Author: Eric S Raymond
+Author-email: esr@thyrsus.com
+Maintainer: James T Browning
+Maintainer-email: JamesB.fe80@gmail.com
+License: BSD 2-Clause License
+Project-URL: Bug Tracker, https://gitlab.com/jamesb_fe80/gpsd/-/issues
+Project-URL: IRC, https://web.libera.chat/
+Project-URL: Project, https://gitlab.com/jamesb_fe80/gpsd
+Project-URL: Support, https://gpsd.io/SUPPORT.html
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 2
+Classifier: License :: OSI Approved :: BSD License
+Classifier: Operating System :: POSIX
+Classifier: Development Status :: 5 - Production/Stable
+Description-Content-Type: text/markdown
+License-File: LICENSE
+License-File: COPYING
+License-File: AUTHORS
+
+# Pessimus GPS
+
+WARNING: Any files at GitLab, GitHub, or other providers are not official
+        release files. The releases only occur at PyPI, similar to GPSDs
+        releases only at savannah.
+
+## General
+
+This module is a Fork of GPSds 'gps' python module for installs not blessed
+by GPSD. It includes some clients interacting with GPSD.
+
+## Resources and Support
+
+There are none; deal with it. In particular, DON'T clog the GPSD community
+support asking for help with this.
+
+## Credit
+
+The credit belongs to all the people who worked on GPSD; Gary E Miller, Eric S
+Raymond, Chris Keuthe, Brook Milligan, Russ Nelson, Remco Treffkorn,
+Timo Ylhainen, Carl Carter, Ville Nuorvala, Amaury Jacquot, Curt Mills,
+Derrick J. Brashear, Bob Lorenzini, Carsten Tschach, and too many other
+people to list.
+
+## LICENSE
+
+This parent software (GPSD) releases under the terms and conditions of the
+BSD License, including a copy in the file gps/COPYING.
+
+This parent software and its bits are Copyright 2013 by the GPSD project.
+
+I see no need to use another license.
