@@ -69,12 +69,6 @@ def is_blank_row(row):
             return False
     return True
 
-def open_gps(file_path):
-    """Opens a GPS JSON file and returns its contents as a list of lists."""
-    with open(file_path, 'r') as file:
-        data = json.load(file)
-    return data
-
 def list_to_df(data):
     """Converts a list of lists into a pandas DataFrame.
     Searches for "Station MAC in Column 2 to split DataFrames."""
