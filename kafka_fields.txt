@@ -1,8 +1,5 @@
 sysId
 essid
 bssid
-channel
-latlon
-rssi
 hc22000 (bool)
 hash

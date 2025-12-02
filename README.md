@@ -4,16 +4,31 @@
 
 **This tool is for research purposes only. I am not responsible for anything you do or damage you cause. Only use against networks you have permission to test.**
 
+### Features
+
+- **Interactive Interface Selection**: Select which wireless interface to use for attacks
+- **Automatic Monitor Mode**: Enables monitor mode on the selected interface
+- **AngryOxide Integration**: Runs AngryOxide as a background subprocess
+- **Hash Exfiltration**: Automatically exfils hashes every 5 seconds via `exfil_hash.sh`
+- **Whitelist Support**: Edit `whitelist.txt` to add BSSIDs to ignore
+
 ### Usage
 
 ```bash
 python3 AVC.py
 ```
-Edit `whitelist.txt` to add BSSIDs to ignore.
+
+The script will:
+1. Display available wireless interfaces
+2. Prompt you to select an interface
+3. Enable monitor mode on the selected interface
+4. Start AngryOxide in the background
+5. Automatically run hash exfiltration every 5 seconds
+6. Press `Ctrl-C` to gracefully shut down
 
 ### Quick Compatibility Check
 
-**Linux**: Full support on all distributions with nl80211 drivers
+**Linux**: Full support on all distributions with nl80211 drivers (Ubuntu 24.04 tested)
 
 The overall goal of this tool is to provide a single-interface survey capability with advanced automated attacks that result in valid hashlines you can crack with [Hashcat](https://hashcat.net/hashcat/).
 
@@ -28,7 +43,6 @@ sudo ./install.sh # Install
 ```bash
 sudo apt-get install python3-kafka
 ```
-
 
 #### Uninstalling:
 

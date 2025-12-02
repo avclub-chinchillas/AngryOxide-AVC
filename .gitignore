@@ -10,3 +10,5 @@
 *.gps
 .claude/*
 target/*
+__pycache__/
+*.pyc
