@@ -1,3 +1,2 @@
 kafka-python-ng
 pandas
-gpsd-py3

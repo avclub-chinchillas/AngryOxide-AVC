@@ -9,7 +9,7 @@
 - **Interactive Interface Selection**: Select which wireless interface to use for attacks
 - **Automatic Monitor Mode**: Enables monitor mode on the selected interface
 - **AngryOxide Integration**: Runs AngryOxide as a background subprocess
-- **Hash Exfiltration**: Automatically exfils hashes every 5 seconds via `exfil_hash.sh`
+- **Hash Exfiltration**: Automatically exfils hashes via Kafka
 - **Whitelist Support**: Edit `whitelist.txt` to add BSSIDs to ignore
 
 ### Usage
@@ -23,8 +23,9 @@ The script will:
 2. Prompt you to select an interface
 3. Enable monitor mode on the selected interface
 4. Start AngryOxide in the background
-5. Automatically run hash exfiltration every 5 seconds
-6. Press `Ctrl-C` to gracefully shut down
+5. Scan for hash files every <INTERVAL> seconds
+6. Publish these hash pairs to a Kafka topic
+7. Press `Ctrl-C` to gracefully shut down
 
 ### Quick Compatibility Check
 
@@ -32,7 +33,9 @@ The script will:
 
 The overall goal of this tool is to provide a single-interface survey capability with advanced automated attacks that result in valid hashlines you can crack with [Hashcat](https://hashcat.net/hashcat/).
 
-## Install Requirements
+## Install Requirementsessid
+bssid
+hc22000 (bool)
 
 ```bash
 git clone https://github.com/avclub-chinchillas/AngryOxide-AVC

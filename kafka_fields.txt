@@ -1,5 +1,2 @@
 sysId
-essid
-bssid
-hc22000 (bool)
-hash
+hash (essid:hash?)
