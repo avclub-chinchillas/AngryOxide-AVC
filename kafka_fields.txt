@@ -1,2 +1,7 @@
+topic: wifi-hash
+fields:
 sysId
-hash (essid:hash?)
+timestamp
+essid
+bssid
+hash

@@ -13,6 +13,7 @@ from kafka import KafkaProducer
 # Global Configurations
 # ======================
 
+sysId = 'Attack1'
 MODULE_INTERVAL = 5  # Interval in seconds to run attack modules
 KAFKA_BROKER = 'localhost:9092'  # Default Kafka broker
 
@@ -225,18 +226,32 @@ def main(interval, broker):
                 if hc_file not in processed_files:
                     print(f"[*] Found new hash file: {hc_file}")
                     try:
+                        # Extract essid and bssid from filename
+                        # Format: essid_BSSID.hc22000
+                        # Remove .hc22000 extension and BSSID (8 chars including underscore)
+                        name_without_ext = hc_file[:-8]
+                        # Split on last underscore to separate essid and bssid
+                        parts = name_without_ext.rsplit('_', 1)
+                        if len(parts) == 2:
+                            essid = parts[0]
+                            bssid = parts[1]
+                        else:
+                            essid = name_without_ext
+                            bssid = 'unknown'
+                        
                         with open(hc_file, 'r') as f:
                             for line in f:
                                 line = line.strip()
                                 if line:
                                     message = {
+                                        'sysId': sysId,
                                         'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-                                        'interface': selected_interface,
-                                        'hash_file': hc_file,
+                                        'essid': essid,
+                                        'bssid': bssid,
                                         'hash': line
                                     }
-                                    print(f"[+] Read hash: {line}")
-                                    publish_to_kafka('wifi_hash', message, broker=broker)
+                                    print(f"[+] Read hash from {essid} ({bssid}): {line}")
+                                    publish_to_kafka('wifi-hash', message, broker=broker)
                         processed_files.add(hc_file)
                     except Exception as e:
                         print(f"[!] Error reading {hc_file}: {e}")
