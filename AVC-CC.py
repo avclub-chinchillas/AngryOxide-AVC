@@ -5,7 +5,7 @@ import sys
 from os import path
 from subprocess import Popen, PIPE, run, DEVNULL
 
-PROCESS_NAME = 'hashcat64.bin'
+PROCESS_NAMES = ['hashcat', 'hashcat64.bin', 'hashcat32.bin']
 
 DESC_MESSAGE = \
   r">>============================================<<" + "\n"\
@@ -22,14 +22,13 @@ WELCOME_MESSAGE = DESC_MESSAGE \
 + "[*] Monitoring hashcat progress and cracked passwords.\n"\
 + "[!] Send SIGINT (Ctrl-C) to exit.\n"
 
-def check_pid(process_name):
-    """Return pid of hashcat process."""
-    stdout = Popen('pidof ' + process_name, shell=True, stdout=PIPE).stdout
-    output = stdout.read().rstrip()
-    output = output.decode('utf-8')
+def check_pids(process_names):
+    """Return the set of PIDs of any running hashcat process."""
+    stdout = Popen('pidof ' + ' '.join(process_names), shell=True, stdout=PIPE).stdout
+    output = stdout.read().rstrip().decode('utf-8')
     if output:
-        return output
-    return False
+        return set(output.split())
+    return set()
 
 
 def check_file(hashcat_outfile):
@@ -281,6 +280,9 @@ Examples:
     monitor_group.add_argument('-n', '--notification-count', dest='notification_count', required=False,
                                type=int, default=5, metavar='COUNT',
                                help='Cease operation after N notifications (default: 5)')
+    monitor_group.add_argument('-p', '--process-name', dest='process_names', action='append',
+                               required=False, metavar='NAME',
+                               help=f'hashcat process name to monitor, repeatable (default: {", ".join(PROCESS_NAMES)})')
 
     remote_group = parser.add_argument_group('Remote Configuration')
     remote_group.add_argument('-r', '--remote', dest='remote', nargs='*', default=None,
@@ -328,11 +330,19 @@ Examples:
             print("[!] -r/--remote accepts maximum 2 arguments.")
             sys.exit(1)
 
-    starting_pid = check_pid(PROCESS_NAME)
-    if not starting_pid:
-        print('[-] hashcat is not running. Exiting.')
-        exit()
-    print('[*] hashcat PID: {}'.format(starting_pid))
+    process_names = args.process_names if args.process_names else PROCESS_NAMES
+    cracking_requested = args.autocrack is not None or args.singlecrack is not None
+
+    # An already-running hashcat is monitored if present, but it is not required:
+    # -ac/-sc start their own, and the outfile can be watched before hashcat starts.
+    starting_pids = check_pids(process_names)
+    if starting_pids:
+        print('[*] hashcat PID(s): {}'.format(', '.join(sorted(starting_pids))))
+    elif cracking_requested:
+        print('[*] No hashcat process running yet. AVC-CC will start its own.')
+    else:
+        print('[!] No hashcat process found (looked for: {}).'.format(', '.join(process_names)))
+        print('[*] Monitoring {} anyway. Use -p to set the process name.'.format(hashcat_outfile))
 
     # Fetch from remote targets if specified
     if remote_targets:
@@ -355,6 +365,7 @@ Examples:
     hashcat_processes = {}
     creds_file = None
     single_crack_process = None
+    own_cracking = False  # True once AVC-CC has started a hashcat process itself
 
     # Handle autocrack
     if args.autocrack is not None:
@@ -362,6 +373,7 @@ Examples:
         print(f'[*] Starting hashcat cracking subprocesses for .hc22000 files...')
         hashcat_processes = start_cracking_subprocesses()
         if hashcat_processes:
+            own_cracking = True
             print(f'[+] Started {len(hashcat_processes)} hashcat processes')
         else:
             print('[!] No hashcat processes started. Check if .hc22000 files exist.')
@@ -384,6 +396,7 @@ Examples:
         print(f'[*] Starting hashcat for single file: {hash_file}...')
         single_crack_process = start_single_crack(hash_file, creds_file)
         if single_crack_process:
+            own_cracking = True
             print(f'[+] Started hashcat for {hash_file}')
         else:
             print('[!] Single crack process failed to start.')
@@ -399,12 +412,19 @@ Examples:
             if single_crack_process:
                 single_crack_process = monitor_single_crack_process(single_crack_process)
 
-            current_pid = check_pid(PROCESS_NAME)
+            # Our own crackers finished and there is no pre-existing run to watch.
+            if own_cracking and not starting_pids and not hashcat_processes and single_crack_process is None:
+                print('[*] All cracking processes finished. Results written to {}.'.format(creds_file))
+                sys.exit(0)
+
+            current_pids = check_pids(process_names)
             current_outfile = check_file(hashcat_outfile)
             current_time = time.strftime('%A %d %B %Y at %H:%M')
-            if starting_pid != current_pid:
+            # Only give up on a pre-existing hashcat run, and only once every PID
+            # we started out with is gone (ours may be in the list too).
+            if starting_pids and not (starting_pids & current_pids):
                 print('[-] Original hashcat process stopped. Exiting.')
-                exit()
+                sys.exit(0)
             elif not current_outfile:
                 print('[-] File does not exist. Monitoring for file creation.'
                       'Checked on {}'.format(current_time))
@@ -418,14 +438,14 @@ Examples:
                 i += 1
                 if i == notification_count + 1:
                     print('[*] Notification limit reached. Happy hunting.')
-                    exit()
+                    sys.exit(0)
                 starting_outfile = current_outfile
                 print('[*] Sent {} out of {} notifications.'.format(i - 1, notification_count))
             print('[*] Sleeping for {} minutes...'.format(check_interval))
             time.sleep(float(check_interval) * 60)
     except KeyboardInterrupt:
         print('[!] SIGINT detected, exiting...')
-        exit()
+        sys.exit(0)
 
 if __name__ == '__main__':
     main()

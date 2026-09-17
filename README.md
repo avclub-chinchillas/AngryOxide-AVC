@@ -10,8 +10,32 @@ This repo pairs the [AngryOxide](https://github.com/Ragnt/AngryOxide) Rust attac
 | --- | --- | --- |
 | `AVC.py` | 0.7a | Wi-Fi attack orchestrator — monitor mode, AngryOxide, hash collection/exfil |
 | `AVC-CC.py` | 0.1a | Crack & Comms — hashcat monitoring, remote hash fetching, auto-cracking |
+| `avc-launcher.sh` | 1.0 | TUI launcher — describes both tools and builds their command lines for you |
 
 The overall goal of this tool is to provide a single-interface survey capability with advanced automated attacks that result in valid hashlines you can crack with [Hashcat](https://hashcat.net/hashcat/).
+
+---
+
+## TUI Launcher
+
+If you would rather not remember flags, start here:
+
+```bash
+sudo ./avc-launcher.sh
+```
+
+A whiptail menu that describes both tools and builds their command lines for you:
+
+- **AVC** — walks through interface selection, output mode (local / Kafka / both), broker address and scan interval
+- **AVC-CC** — working directory, outfile, cracking mode, credentials file, remote fetching (JSON or typed-in host + SSH credentials), check interval, notification count and process name
+- **About** — full description of what each tool does, what it needs, and what it writes
+- **Status** — angryoxide and hashcat presence, venv health, wireless interfaces, whitelist entries, hash file counts
+
+Every input is validated as you type, and the exact command is shown for confirmation before anything runs. The launcher re-runs itself under `sudo`, runs the tools from the project directory inside `avc-venv`, and returns to the menu when a tool exits.
+
+It runs the selected tool in the current terminal by default, so it works over SSH. When a desktop session and a terminal emulator are available (gnome-terminal, xfce4-terminal, mate-terminal, lxterminal, konsole or xterm) it offers to open a separate window instead.
+
+Requires `whiptail` (`sudo apt-get install whiptail`) and a completed `sudo ./install.sh`.
 
 ---
 
@@ -23,14 +47,13 @@ The overall goal of this tool is to provide a single-interface survey capability
 - **Automatic Monitor Mode**: Enables monitor mode on the selected interface via `ip`/`iw`
 - **AngryOxide Integration**: Runs `angryoxide` headless as a background subprocess
 - **Flexible Output Modes**:
-  - Print hashlines locally, with AngryOxide's capture files kept on disk (default)
+  - Archive hash files to a `hashes` folder (default)
   - Publish to a Kafka topic
   - Both local and Kafka simultaneously
-- **Hash Exfiltration**: Polls for new `.hc22000` files and publishes each hashline with metadata
+- **Hash Exfiltration**: Polls for `.hc22000` files and reports each hashline once, including handshakes appended to a file it has already seen
+- **Whitelist Support**: Edit `whitelist.txt` to list BSSIDs or SSIDs to leave alone
 - **Configurable Intervals**: Set the hash-scan interval via command-line argument
 - **Startup Cleanup**: Runs `cleanup.sh` to clear stale capture artifacts before each run
-
-See [Known Issues](#known-issues) before relying on the local-output or whitelist behavior.
 
 ### Usage
 
@@ -46,27 +69,27 @@ The script will:
 2. Select an interface (auto from JSON or interactive prompt)
 3. Enable monitor mode on the selected interface
 4. Create a `hashes` folder if using local output mode
-5. Start AngryOxide in the background (headless)
-6. Scan for `.hc22000` hash files every `<INTERVAL>` seconds
+5. Start AngryOxide in the background (headless), loading `whitelist.txt` if present
+6. Scan the working directory for `.hc22000` hash files every `<INTERVAL>` seconds
 7. Extract ESSID and BSSID from each hash filename (`essid_BSSID.hc22000`)
-8. Print each hashline and publish it to Kafka if a broker was configured
+8. Print each new hashline, publish it to Kafka if a broker was configured, and copy the file into `hashes/` in local mode
 9. Press `Ctrl-C` to terminate AngryOxide and shut down gracefully
 
 > **⚠️ `cleanup.sh` is destructive.** On every startup it runs `sudo rm` against `oxide-*`, `scan-*`, `*.kismet`, `*.kismet-journal`, and `*.hc22000` in the current directory. Move any captures you want to keep out of the project root before starting a new run. Files already inside `hashes/` are not touched.
 
 ### Output Modes
 
-The flags select which directory AVC.py polls and whether it publishes to Kafka:
+AngryOxide writes `.hc22000` files into the working directory, so that is always where AVC.py looks. The flags decide what happens to each hashline it finds:
 
-| Mode | Flags | Polled directory | Publishes to Kafka |
+| Mode | Flags | Archived to `hashes/` | Published to Kafka |
 | --- | --- | --- | --- |
-| Local Only (default) | none or `-lo` | `hashes/` | No — hashlines are printed only |
-| Kafka Only | `-b <broker>` | project root | Yes |
-| Local + Kafka | `-b <broker> -lo` | `hashes/` | Yes |
+| Local Only (default) | none or `-lo` | Yes | No — hashlines are printed only |
+| Kafka Only | `-b <broker>` | No | Yes |
+| Local + Kafka | `-b <broker> -lo` | Yes | Yes |
 
-Each file is processed once per run; already-seen filenames are tracked in memory (restarting re-processes everything still on disk).
+Archiving copies the file, so AngryOxide keeps appending to the original and the copy in `hashes/` survives the next `cleanup.sh` run.
 
-> **⚠️ AngryOxide always writes `.hc22000` files to the working directory, never into `hashes/`.** Its `-o` flag is an output *filename prefix*, not an output directory — it only renames the `.pcapng`/`.kismet` files. So in the two local modes AVC.py polls a `hashes/` folder that never receives anything. Only **Kafka Only** mode (`-b` with no `-lo`) polls the directory the hashes actually land in. See [Known Issues](#known-issues).
+Each hashline is reported once per run — de-duplication is by hashline rather than by filename, so extra handshakes appended to a file already on disk are still picked up. Restarting re-processes whatever hash files remain in the working directory.
 
 ### Command-Line Options
 
@@ -135,7 +158,7 @@ The program lists wireless interfaces with `iwconfig` and selects the first conf
 AA:BB:CC:DD:EE:FF
 ```
 
-> **⚠️ The file is not currently loaded.** AVC.py passes it as `-w whitelist.txt`, but in AngryOxide `-w` is the short form of `--whitelist-entry`, which takes a literal MAC or SSID — so this whitelists a network *named* "whitelist.txt". Loading a file requires the long-only `--whitelist` flag. See [Known Issues](#known-issues).
+The file is passed to AngryOxide with `--whitelist`. If it is missing, AVC.py says so and starts without a whitelist rather than letting AngryOxide abort. Change the path with the `WHITELIST_FILE` constant in `AVC.py`.
 
 ### Fixed AngryOxide Settings
 
@@ -144,10 +167,11 @@ AVC.py launches AngryOxide with a fixed argument set. To change any of these, ed
 - Channels: `-c 1,2,3,4,5,6,7,8,10,11,12,13` (2.4 GHz only; note channel 9 is omitted)
 - Attack rate: `-r 3` (most aggressive)
 - Mode: `--headless --notar` (no TUI, no tarball of output files)
-- Whitelist entry: `-w whitelist.txt`
-- Output prefix: `-o hashes` (local modes only — names the capture files `hashes.kismet` / `hashes-<timestamp>.pcapng`)
+- Whitelist: `--whitelist whitelist.txt` (when the file exists)
 
-The Kafka `sysId` value is the `sysId` constant near the top of `AVC.py` (default: `Attack1`).
+No `-o` prefix is passed, so captures use AngryOxide's default `oxide` prefix — which is what `cleanup.sh` expects to find.
+
+The Kafka `sysId` value is the `sysId` constant near the top of `AVC.py` (default: `Attack1`), and the archive folder is the `ARCHIVE_DIR` constant (default: `hashes`).
 
 ### Kafka Output Format
 
@@ -171,15 +195,9 @@ One message is published per hashline in the file. Kafka failures are logged and
 
 ## Known Issues
 
-These are current behaviors of the code as committed, not configuration mistakes. Documented here so runs are not misread as "no networks found".
-
-| # | Issue | Effect | Workaround |
-| --- | --- | --- | --- |
-| 1 | AVC.py polls `hashes/` in local modes, but AngryOxide writes `.hc22000` files to the working directory | Default (local) and `-lo -b` modes never see any hashes — nothing is printed or published | Use Kafka-only mode (`-b <broker>` without `-lo`), or move/symlink hashes into `hashes/`, or change `hash_dir` to `'.'` in `AVC.py` |
-| 2 | `-w whitelist.txt` uses AngryOxide's `--whitelist-entry` short flag, which expects a literal MAC/SSID | `whitelist.txt` is never read; every network is in scope | Change the flag in `AVC.py` from `-w` to `--whitelist`, or pass each entry individually with repeated `-w` |
-| 3 | `cleanup.sh` runs on every AVC.py startup | Deletes `*.hc22000`, `*.kismet`, `*.kismet-journal`, `scan-*`, and `oxide-*` from the project root | Archive captures elsewhere before restarting, or comment out the `cleanup.sh` call |
-| 4 | `install.sh` copies `./angryoxide`, which is not in the repo | Install reports success while leaving no binary in `/usr/bin/` | Build first (see [Install Requirements](#install-requirements)) and verify with `which angryoxide` |
-| 5 | AVC-CC.py exits immediately unless a process named `hashcat64.bin` is running | The script quits before monitoring or `-ac`/`-sc` cracking ever starts | Edit the `PROCESS_NAME` constant to match your hashcat binary name (e.g. `hashcat`) |
+| Issue | Effect | Workaround |
+| --- | --- | --- |
+| `cleanup.sh` runs on every AVC.py startup | Deletes `*.hc22000`, `*.kismet`, `*.kismet-journal`, `scan-*`, and `oxide-*` from the project root | Files already archived in `hashes/` are safe; otherwise move captures elsewhere before restarting, or comment out the `cleanup.sh` call in `AVC.py` |
 
 ---
 
@@ -188,42 +206,37 @@ These are current behaviors of the code as committed, not configuration mistakes
 ```bash
 git clone https://github.com/avclub-chinchillas/AngryOxide-AVC
 cd AngryOxide-AVC
-```
-
-### 1. Build the `angryoxide` binary
-
-The repo ships the Rust source, not a prebuilt binary. `install.sh` copies `./angryoxide` from the project root, so build it and put it there first:
-
-```bash
-cargo build --release          # or: make build
-cp target/release/angryoxide .
-```
-
-> If `./angryoxide` is missing, `install.sh` still reports success but the binary step silently fails and `AVC.py` will not be able to start AngryOxide. Verify with `which angryoxide` after installing.
-
-Alternatively, `sudo make install` installs the binary straight from `target/release/` along with the shell completions (but does not set up the Python venv).
-
-### 2. Run the installer
-
-```bash
 chmod +x install.sh # Make executable
-sudo ./install.sh # Full automated installation
+sudo ./install.sh # Full end-to-end installation
 ```
 
-The install script will automatically:
-- Install required system dependencies via apt (skipping already-installed ones):
-  - `python3`, `python3-venv`, `python3-pip`
-  - `sshpass` (for remote SCP functionality)
-  - `wireless-tools`, `iw` (interface control)
-  - `curl`
-- Install optional packages for the cracking features, continuing if they are unavailable:
-  - `hashcat`, `wordlists`
-- Create a Python virtual environment (`avc-venv`)
-- Install the `angryoxide` binary to `/usr/bin/`
-- Install shell completions (bash and zsh)
-- Install Python dependencies from `requirements.txt` (pandas, kafka-python-ng) into the venv
+One command does everything: apt packages, the Rust toolchain, the build, the binary, completions, and the Python environment. **The install is idempotent** — re-run it any time to update or repair, and it only does the work that is still missing (skipped steps are reported with `[=]`).
 
-No manual apt or pip commands needed.
+`sudo ./install.sh help` lists the commands; `sudo ./install.sh uninstall` removes just the binary and completions.
+
+### What the installer does
+
+**1. System dependencies** (via apt, skipping what is already installed)
+
+| Group | Packages | On failure |
+| --- | --- | --- |
+| Runtime | `python3`, `python3-venv`, `python3-pip`, `sshpass`, `wireless-tools`, `iw`, `curl`, `whiptail` | Install aborts |
+| Build | `build-essential`, `pkg-config`, `libssl-dev`, `git` | Install aborts |
+| Optional | `hashcat`, `wordlists` (for `AVC-CC.py` cracking) | Warns and continues |
+
+**2. Rust toolchain** — reuses any cargo already on the system (including one installed under the invoking user's `~/.cargo`) as long as it meets the `rust-version = 1.70` floor from `Cargo.toml`. Otherwise it installs `rustc`/`cargo` from apt, and if the distro's version is still too old it falls back to a system-wide rustup install under `/usr/local/rustup`, symlinked into `/usr/local/bin` with `RUSTUP_HOME` exported from `/etc/profile.d/rust-avc.sh`.
+
+**3. Build** — `cargo build --release`. The first build takes several minutes; later runs are incremental no-ops. When the build runs as root, `target/` is handed back to the invoking user afterwards so you can run cargo yourself later.
+
+**4. Binary and completions** — installs `target/release/angryoxide` to `/usr/bin/` (skipped when the installed copy is already identical) plus bash and zsh completions. If no toolchain could be installed but a prebuilt binary exists in the project root or `target/`, that is used instead; with neither, the install fails loudly rather than finishing without a binary.
+
+**5. Python environment** — creates the `avc-venv` virtual environment as root and installs `requirements.txt` (pandas, kafka-python-ng) into it.
+
+It finishes by verifying that `angryoxide --version` runs and that `pandas` and `kafka` import from the venv, reporting any problems in the summary.
+
+No manual apt, cargo, or pip commands needed.
+
+> `sudo make install` remains as an alternative that installs an already-built binary from `target/release/` plus completions, but it does not install dependencies, build, or set up the venv.
 
 ### Running the Program
 
@@ -239,6 +252,8 @@ Or run it directly with the venv's Python:
 ```bash
 ./avc-venv/bin/python3 AVC.py [OPTIONS]
 ```
+
+`avc-venv` is owned by root. Any user can activate it and run the scripts, but adding packages to it needs `sudo` — or re-run `sudo ./install.sh` after editing `requirements.txt`.
 
 ### Uninstalling
 
@@ -276,10 +291,19 @@ python3 AVC-CC.py -o <hashcat_outfile> [OPTIONS]
 
 ### Prerequisites
 
-- **A hashcat process named `hashcat64.bin` must already be running.** On startup AVC-CC runs `pidof hashcat64.bin`; if nothing is found it prints `[-] hashcat is not running. Exiting.` and quits — including when you only wanted `-ac`/`-sc`. The monitored process name is the `PROCESS_NAME` constant at the top of `AVC-CC.py`; change it to match your hashcat binary (e.g. `hashcat`). The loop also exits as soon as that original PID goes away.
 - `-o/--outfile` is **required in every mode**, including the cracking modes.
 - `.hc22000` files are discovered in the **current working directory**, not in `hashes/`. Run AVC-CC from wherever the hashes live (e.g. `cd hashes`) or pass an explicit path to `-sc`.
 - `sshpass` must be installed for remote fetching, and `hashcat` plus a wordlist for cracking.
+
+An already-running hashcat is **not** required. On startup AVC-CC runs `pidof` against `hashcat`, `hashcat64.bin`, and `hashcat32.bin` (override with `-p`, repeatable) and behaves as follows:
+
+| Situation | Behavior |
+| --- | --- |
+| A hashcat process is found | Monitors it, and exits once every PID it started with is gone |
+| None found, `-ac`/`-sc` given | Starts its own cracking processes and exits when they all finish |
+| None found, monitoring only | Warns, then keeps watching the outfile (which may not exist yet) |
+
+Cracking processes AVC-CC starts itself never count as the "original" hashcat run, so they cannot trigger the stopped-process exit.
 
 ### Local Monitoring
 
@@ -311,6 +335,7 @@ python3 AVC-CC.py -r hash-targets.json -o results.txt
 - `-o, --outfile` — Hashcat output file to monitor (required)
 - `-i, --interval` — Check interval in minutes, accepts fractions (default: 15)
 - `-n, --notification-count` — Number of notifications before exit (default: 5)
+- `-p, --process-name` — hashcat process name to monitor, repeatable (default: `hashcat`, `hashcat64.bin`, `hashcat32.bin`)
 - `-r, --remote` — Remote target(s) for SCP transfer:
   - Direct format: `-r IP:filepath username:password` (both arguments required)
   - JSON format: `-r hash-targets.json` (credentials come from the file)

