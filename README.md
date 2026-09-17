@@ -164,10 +164,12 @@ The file is passed to AngryOxide with `--whitelist`. If it is missing, AVC.py sa
 
 AVC.py launches AngryOxide with a fixed argument set. To change any of these, edit the `angryoxide_cmd` list in `AVC.py`:
 
-- Channels: `-c 1,2,3,4,5,6,7,8,10,11,12,13` (2.4 GHz only; note channel 9 is omitted)
+- Bands: `--band 2 --band 5 --band 6` — 2.4, 5 and 6 GHz. AngryOxide expands each band to **every channel the interface is actually capable of** (read from nl80211) and ignores bands the card does not support, so scanning follows the hardware instead of a fixed channel list.
 - Attack rate: `-r 3` (most aggressive)
 - Mode: `--headless --notar` (no TUI, no tarball of output files)
 - Whitelist: `--whitelist whitelist.txt` (when the file exists)
+
+The scanned bands are the `SCAN_BANDS` constant near the top of `AVC.py` (AngryOxide band IDs: `2` = 2.4 GHz, `5` = 5 GHz, `6` = 6 GHz, `60` = 60 GHz). Trim it to restrict scanning — e.g. `['2']` for 2.4 GHz only, or `['5', '6']` to skip 2.4 GHz. 60 GHz (802.11ad) is intentionally left out.
 
 No `-o` prefix is passed, so captures use AngryOxide's default `oxide` prefix — which is what `cleanup.sh` expects to find.
 

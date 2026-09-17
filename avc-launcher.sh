@@ -137,8 +137,8 @@ AVC_DESC="\
 AVC.py  —  Automatic Wi-Fi Pwner   (v0.7a)
 
   Clears stale captures with cleanup.sh, puts a wireless interface into
-  monitor mode, and runs AngryOxide headless against 2.4 GHz channels
-  1-8 and 10-13 at attack rate 3.
+  monitor mode, and runs AngryOxide headless at attack rate 3 across
+  every channel the interface supports in the 2.4, 5 and 6 GHz bands.
 
   Collected WPA/WPA2 handshakes land in the working directory as
   <essid>_<bssid>.hc22000 files. AVC.py reads each new hashline and,

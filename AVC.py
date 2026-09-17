@@ -18,6 +18,14 @@ sysId = 'Attack1'
 MODULE_INTERVAL = 5  # Interval in seconds to run attack modules
 KAFKA_BROKER = 'localhost:9092'  # Default Kafka broker
 WHITELIST_FILE = 'whitelist.txt'  # Passed to AngryOxide with --whitelist
+
+# AngryOxide band IDs (from nl80211): 2 = 2.4 GHz, 5 = 5 GHz, 6 = 6 GHz, 60 = 60 GHz.
+# Passing --band <id> tells AngryOxide to scan every channel the interface is
+# actually capable of in that band (it reads the enabled-channel list straight
+# from nl80211); bands the card does not support are ignored. This covers all
+# capable channels across all bands instead of a fixed 2.4 GHz channel list.
+# Trim this to restrict scanning, e.g. ['2'] for 2.4 GHz only or ['5'] for 5 GHz.
+SCAN_BANDS = ['2', '5', '6']  # 2.4 GHz, 5 GHz, 6 GHz
 ARCHIVE_DIR = 'hashes'  # Where local mode keeps a copy of each hash file
 
 DESC_MESSAGE = \
@@ -25,9 +33,9 @@ DESC_MESSAGE = \
 + r"||     _    ___               ___     ______  ||"  + "\n"\
 + r"||    / \  / _ \             / \ \   / / ___| ||"  + "\n"\
 + r"||   / _ \| | | |  _____    / _ \ \ / / |     ||"  + " by dr0pp1n\n"\
-+ r"||  / ___ \ |_| | |_____|  / ___ \ V /| |___  ||"  + " Version 0.7a\n"\
-+ r"|| /_/   \_\___/          /_/   \_\_/  \____| ||"  + " Build 260817\n"\
-+ r"||                                            ||"  + "\n"\
++ r"||  / ___ \ |_| | |_____|  / ___ \ V /| |___  ||"  + " Version 0.8\n"\
++ r"|| /_/   \_\___/          /_/   \_\_/  \____| ||"  + " Build 260917\n"\
++ r"||                                            ||"  + " AutoPwner\n"\
 + r">>============================================<<"  + "\n"
 
 WELCOME_MESSAGE = DESC_MESSAGE \
@@ -286,7 +294,14 @@ def main(interval, broker, use_local, use_kafka, auto_config):
     print("[*] Starting attack modules...")
     # Start AngryOxide subprocess
     print(f"[*] Starting AngryOxide on {selected_interface}...")
-    angryoxide_cmd = ['sudo', 'angryoxide', '-i', selected_interface, '-c', '1,2,3,4,5,6,7,8,10,11,12,13', '-r', '3', '--headless', '--notar']
+    angryoxide_cmd = ['sudo', 'angryoxide', '-i', selected_interface, '-r', '3', '--headless', '--notar']
+    # Scan every channel the interface supports across all configured bands
+    # rather than a fixed 2.4 GHz list. AngryOxide expands each --band to the
+    # interface's capable channels and ignores bands the card cannot use.
+    for band in SCAN_BANDS:
+        angryoxide_cmd.extend(['--band', band])
+    band_names = {'2': '2.4 GHz', '5': '5 GHz', '6': '6 GHz', '60': '60 GHz'}
+    print(f"[*] Scanning all capable channels in bands: {', '.join(band_names.get(b, b) for b in SCAN_BANDS)}")
     # --whitelist loads a file; the -w short flag takes a single MAC/SSID instead.
     if os.path.isfile(WHITELIST_FILE):
         angryoxide_cmd.extend(['--whitelist', WHITELIST_FILE])
