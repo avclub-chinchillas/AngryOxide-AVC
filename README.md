@@ -187,7 +187,18 @@ Hashes are published to the `wifi-hash` topic (see `kafka_fields.txt`) with the 
 
 Filenames are `<essid>_<bssid>.hc22000` and are split on the **last** underscore, so SSIDs containing underscores still parse correctly.
 
-One message is published per hashline in the file. Kafka failures are logged and skipped — they do not stop the scan loop.
+One message is published per hashline in the file.
+
+### Kafka Delivery & Offline Queuing
+
+Kafka publishing is resilient to a broker that is down or comes and goes:
+
+- **Every message is queued the moment it is generated** and delivery is confirmed synchronously — a message only leaves the queue once the broker acknowledges it, so nothing is dropped on a failed send.
+- **The queue is spooled to disk** (`kafka_spool.jsonl` in the working directory). If the broker is unreachable, messages accumulate there instead of being lost, and the tool logs that it is queuing.
+- **Restoration is detected automatically.** Every scan interval the tool retries the backlog; when the broker comes back it drains the queue oldest-first and logs `Kafka connection … restored — delivered N queued message(s)`.
+- **The backlog survives a restart.** On startup AVC.py reloads `kafka_spool.jsonl` and delivers anything a previous run left un-sent (once the broker is reachable). A clean shutdown (`Ctrl-C`) flushes what it can and leaves the rest spooled for next time.
+
+Tunables are constants near the top of `AVC.py`: `KAFKA_TOPIC`, `KAFKA_SPOOL_FILE`, `KAFKA_CONNECT_TIMEOUT_MS`, and `KAFKA_SEND_TIMEOUT` (seconds to wait for each message's broker acknowledgement). `cleanup.sh` does not touch the spool file, so a queued backlog is safe across restarts.
 
 ### Quick Compatibility Check
 

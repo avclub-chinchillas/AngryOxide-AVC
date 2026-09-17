@@ -14,3 +14,5 @@ __pycache__/
 *.pyc
 *.kismet-journal
 avc-venv/
+kafka_spool.jsonl
+kafka_spool.jsonl.tmp
