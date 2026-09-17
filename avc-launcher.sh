@@ -128,6 +128,56 @@ ask_password() {   # title, prompt
     whiptail --title "$1" --passwordbox "$2" 12 "$W" 3>&1 1>&2 2>&3
 }
 
+# ── Persistent configuration (avc.conf) ──────────────────────────────────────
+# AVC.py reads avc.conf at startup; these helpers view and edit it. The
+# effective config (built-ins overridden by the file) comes from
+# 'AVC.py --print-config' so the launcher never duplicates the defaults.
+
+CONFIG_FILE="$PROJECT_DIR/avc.conf"
+CFG_JSON="{}"
+
+cfg_refresh() {   # cache the effective config once per menu render
+    CFG_JSON="$(cd "$PROJECT_DIR" && "$VENV_PY" AVC.py --print-config 2>/dev/null)"
+    [[ -n "$CFG_JSON" ]] || CFG_JSON="{}"
+}
+
+cfg_get() {   # key -> scalar value from the cached config
+    printf '%s' "$CFG_JSON" | "$VENV_PY" -c \
+        'import sys,json;print(json.load(sys.stdin).get(sys.argv[1],""))' "$1" 2>/dev/null
+}
+
+cfg_get_list() {   # key -> list value as space-separated items
+    printf '%s' "$CFG_JSON" | "$VENV_PY" -c \
+        'import sys,json;print(" ".join(str(x) for x in json.load(sys.stdin).get(sys.argv[1],[])))' "$1" 2>/dev/null
+}
+
+cfg_set() {   # key  type(str|int|list)  [values...] -> merge one key into avc.conf
+    local key="$1" type="$2"; shift 2
+    "$VENV_PY" - "$CONFIG_FILE" "$key" "$type" "$@" <<'PY'
+import json, os, sys
+path, key, typ = sys.argv[1], sys.argv[2], sys.argv[3]
+vals = sys.argv[4:]
+cfg = {}
+if os.path.isfile(path):
+    try:
+        with open(path) as f:
+            cfg = json.load(f)
+        if not isinstance(cfg, dict):
+            cfg = {}
+    except Exception:
+        cfg = {}
+if typ == 'int':
+    cfg[key] = int(vals[0])
+elif typ == 'list':
+    cfg[key] = list(vals)
+else:
+    cfg[key] = vals[0] if vals else ""
+with open(path, 'w') as f:
+    json.dump(cfg, f, indent=2)
+    f.write('\n')
+PY
+}
+
 # ── Tool descriptions ────────────────────────────────────────────────────────
 
 AVC_SUMMARY="AVC — attack + hash exfil (monitor mode, AngryOxide)"
@@ -338,6 +388,7 @@ launch() {
 configure_avc() {
     local -a cmd=("$VENV_PY" "AVC.py")
     local choice value
+    cfg_refresh   # so broker/interval/topic dialogs default to the saved config
 
     if ! command -v angryoxide &> /dev/null; then
         confirm " angryoxide missing " \
@@ -381,18 +432,19 @@ configure_avc() {
             ;;
         kafka|both)
             value=$(ask_input " AVC — Kafka broker " \
-"\nKafka broker address as ip:port\n(topic is always 'wifi-hash'):" "localhost:9092" \
+"\nKafka broker address as ip:port\n(publishing to topic '$(cfg_get topic)'):" "$(cfg_get broker)" \
                 '^[A-Za-z0-9._-]+:[0-9]+$' "Enter an address in ip:port form, e.g. 192.168.1.100:9092") || return 0
             cmd+=("-b" "$value")
             [[ "$choice" == "both" ]] && cmd+=("-lo")
             ;;
     esac
 
-    # 3. Scan interval
+    # 3. Scan interval (defaults to the configured interval)
+    local def_interval; def_interval="$(cfg_get interval)"
     value=$(ask_input " AVC — scan interval " \
-"\nHow often to check for new .hc22000 files, in seconds:" "5" \
+"\nHow often to check for new .hc22000 files, in seconds:" "$def_interval" \
         '^[1-9][0-9]*$' "The interval must be a whole number of seconds, 1 or more.") || return 0
-    [[ "$value" == "5" ]] || cmd+=("-i" "$value")
+    [[ "$value" == "$def_interval" ]] || cmd+=("-i" "$value")
 
     launch "AVC — Wi-Fi attack" "${cmd[@]}"
 }
@@ -506,14 +558,180 @@ configure_avc_cc() {
     WORKDIR="$saved_workdir"
 }
 
+# ── Configuration menu ───────────────────────────────────────────────────────
+
+configure_settings() {
+    while true; do
+        cfg_refresh
+        local choice
+        choice=$(whiptail --title " AVC — configuration (avc.conf) " --menu \
+"\nPersistent defaults AVC.py reads at startup. Command-line flags still\noverride these per run. Current value shown in [brackets].\n" \
+            "$H" "$W" 9 \
+            "broker"    "Kafka broker address:port   [$(cfg_get broker)]" \
+            "topic"     "Kafka topic                 [$(cfg_get topic)]" \
+            "bands"     "Band targeting              [$(cfg_get_list bands)]" \
+            "channels"  "Explicit channels           [$(cfg_get_list channels)]" \
+            "sysid"     "System ID (Kafka sysId)     [$(cfg_get sysId)]" \
+            "interval"  "Default scan interval (s)   [$(cfg_get interval)]" \
+            "advanced"  "Advanced Kafka tunables ..." \
+            "view"      "View full configuration" \
+            "reset"     "Reset all settings to defaults" \
+            3>&1 1>&2 2>&3) || return 0
+        case "$choice" in
+            broker)   cfg_edit_broker ;;
+            topic)    cfg_edit_topic ;;
+            bands)    cfg_edit_bands ;;
+            channels) cfg_edit_channels ;;
+            sysid)    cfg_edit_sysid ;;
+            interval) cfg_edit_interval ;;
+            advanced) cfg_edit_advanced ;;
+            view)     cfg_view ;;
+            reset)    cfg_reset ;;
+        esac
+    done
+}
+
+cfg_edit_broker() {
+    local value
+    value=$(ask_input " Config — Kafka broker " \
+"\nDefault Kafka broker as ip:port, used when AVC.py publishes to Kafka:\n" "$(cfg_get broker)" \
+        '^[A-Za-z0-9._-]+:[0-9]+$' "Enter an address in ip:port form, e.g. 192.168.1.100:9092") || return 0
+    cfg_set broker str "$value"
+}
+
+cfg_edit_topic() {
+    local value
+    value=$(ask_input " Config — Kafka topic " \
+"\nKafka topic hashes are published to:\n" "$(cfg_get topic)" \
+        '^[A-Za-z0-9._-]+$' "Topic names may use letters, digits, dot, dash and underscore.") || return 0
+    cfg_set topic str "$value"
+}
+
+cfg_edit_bands() {
+    local current on2 on5 on6 on60 sel
+    current=" $(cfg_get_list bands) "
+    [[ "$current" == *" 2 "*  ]] && on2=ON  || on2=OFF
+    [[ "$current" == *" 5 "*  ]] && on5=ON  || on5=OFF
+    [[ "$current" == *" 6 "*  ]] && on6=ON  || on6=OFF
+    [[ "$current" == *" 60 "* ]] && on60=ON || on60=OFF
+    sel=$(whiptail --title " Config — band targeting " --checklist \
+"\nScan every channel the interface supports in the selected bands.\nSPACE toggles, ENTER confirms. (Ignored while explicit channels are set.)\n" \
+        "$H" "$W" 4 \
+        "2"  "2.4 GHz" "$on2" \
+        "5"  "5 GHz"   "$on5" \
+        "6"  "6 GHz"   "$on6" \
+        "60" "60 GHz"  "$on60" \
+        3>&1 1>&2 2>&3) || return 0
+    local -a arr
+    read -ra arr <<< "$(echo "$sel" | tr -d '"')"
+    if [[ ${#arr[@]} -eq 0 ]]; then
+        msg " Band targeting " "\nSelect at least one band — leaving the bands unchanged." 10
+        return 0
+    fi
+    cfg_set bands list "${arr[@]}"
+}
+
+cfg_edit_channels() {
+    local current value
+    current="$(cfg_get_list channels | tr ' ' ',')"
+    value=$(ask_input " Config — explicit channels " \
+"\nComma-separated channels to scan INSTEAD of whole bands,\ne.g. 1,6,11,36,149. Leave empty to scan by band.\n" "$current" \
+        '^[0-9A-Za-z.,]*$' "Channel numbers separated by commas (band suffixes like 36.6e allowed).") || return 0
+    if [[ -z "$value" ]]; then
+        cfg_set channels list          # empty -> []  (back to band scanning)
+    else
+        local -a arr
+        IFS=',' read -ra arr <<< "$value"
+        cfg_set channels list "${arr[@]}"
+    fi
+}
+
+cfg_edit_sysid() {
+    local value
+    value=$(ask_input " Config — system ID " \
+"\nIdentifier sent in every Kafka message as 'sysId'\n(useful to tell capture rigs apart):\n" "$(cfg_get sysId)" \
+        '^[^[:space:]]+$' "Enter an ID with no spaces.") || return 0
+    cfg_set sysId str "$value"
+}
+
+cfg_edit_interval() {
+    local value
+    value=$(ask_input " Config — scan interval " \
+"\nDefault seconds between hash-file scans (the -i flag overrides it):\n" "$(cfg_get interval)" \
+        '^[1-9][0-9]*$' "Enter a whole number of seconds, 1 or more.") || return 0
+    cfg_set interval int "$value"
+}
+
+cfg_edit_advanced() {
+    while true; do
+        cfg_refresh
+        local choice value
+        choice=$(whiptail --title " Config — advanced Kafka " --menu \
+"\nResilience tunables for the offline queue.\n" "$H" "$W" 4 \
+            "spool"   "Spool file (offline queue)  [$(cfg_get spool_file)]" \
+            "connect" "Connect timeout ms          [$(cfg_get connect_timeout_ms)]" \
+            "send"    "Send ack timeout s          [$(cfg_get send_timeout)]" \
+            "back"    "Back" \
+            3>&1 1>&2 2>&3) || return 0
+        case "$choice" in
+            spool)
+                value=$(ask_input " Config — spool file " \
+"\nFile that holds un-sent Kafka messages while the broker is down:\n" "$(cfg_get spool_file)" \
+                    '^[^[:space:]]+$' "Enter a filename with no spaces.") || continue
+                cfg_set spool_file str "$value" ;;
+            connect)
+                value=$(ask_input " Config — connect timeout " \
+"\nMax milliseconds to block establishing/using the producer:\n" "$(cfg_get connect_timeout_ms)" \
+                    '^[1-9][0-9]*$' "Enter a whole number of milliseconds.") || continue
+                cfg_set connect_timeout_ms int "$value" ;;
+            send)
+                value=$(ask_input " Config — send timeout " \
+"\nSeconds to wait for each message's broker acknowledgement:\n" "$(cfg_get send_timeout)" \
+                    '^[1-9][0-9]*$' "Enter a whole number of seconds.") || continue
+                cfg_set send_timeout int "$value" ;;
+            back|"") return 0 ;;
+        esac
+    done
+}
+
+cfg_view() {
+    local tmp; tmp="$(mktemp)"
+    {
+        if [[ -f "$CONFIG_FILE" ]]; then
+            echo "Config file : $CONFIG_FILE"
+        else
+            echo "Config file : (none yet — built-in defaults; saving any"
+            echo "              setting creates avc.conf)"
+        fi
+        echo ""
+        echo "Effective settings AVC.py will use:"
+        echo ""
+        printf '%s\n' "$CFG_JSON"
+    } > "$tmp"
+    textfile " Current configuration " "$tmp"
+    rm -f "$tmp"
+}
+
+cfg_reset() {
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        msg " Reset " "\nNo avc.conf present — already at built-in defaults." 9
+        return 0
+    fi
+    confirm " Reset configuration " \
+"\nDelete '$CONFIG_FILE' and return to built-in defaults?\n\nThis cannot be undone." 12 || return 0
+    rm -f "$CONFIG_FILE"
+    msg " Reset " "\nConfiguration reset to built-in defaults." 9
+}
+
 # ── Main menu ────────────────────────────────────────────────────────────────
 
 main_menu() {
     whiptail --title "$TITLE" --menu \
 "\nSelect a tool to configure and launch.\nArrow keys to move, ENTER to select, ESC to quit.\n" \
-        "$H" "$W" 5 \
+        "$H" "$W" 6 \
         "avc"     "$AVC_SUMMARY" \
         "avc-cc"  "$AVC_CC_SUMMARY" \
+        "config"  "Configuration — broker, bands/channels, sysId ..." \
         "about"   "About — what each tool does and what it needs" \
         "status"  "Status — interfaces, binaries and hash files" \
         "quit"    "Quit the launcher" \
@@ -525,6 +743,7 @@ while true; do
     case "$CHOICE" in
         avc)     configure_avc ;;
         avc-cc)  configure_avc_cc ;;
+        config)  configure_settings ;;
         about)   show_about ;;
         status)  show_status ;;
         quit)    break ;;

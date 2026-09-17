@@ -33,7 +33,15 @@ KAFKA_SEND_TIMEOUT = 10                  # Seconds to wait for each message's br
 # capable channels across all bands instead of a fixed 2.4 GHz channel list.
 # Trim this to restrict scanning, e.g. ['2'] for 2.4 GHz only or ['5'] for 5 GHz.
 SCAN_BANDS = ['2', '5', '6']  # 2.4 GHz, 5 GHz, 6 GHz
+# Explicit channel list passed to AngryOxide with -c. When non-empty it is used
+# INSTEAD of whole-band scanning; empty means scan by SCAN_BANDS.
+SCAN_CHANNELS = []
 ARCHIVE_DIR = 'hashes'  # Where local mode keeps a copy of each hash file
+
+# Persistent configuration file (JSON). Values here override the built-in
+# defaults above; command-line flags still override the config. Edit it by hand
+# or through avc-launcher.sh's Configuration menu.
+CONFIG_FILE = 'avc.conf'
 
 DESC_MESSAGE = \
   r">>============================================<<" + "\n"\
@@ -53,6 +61,69 @@ WELCOME_MESSAGE = DESC_MESSAGE \
 # ======================
 # Helper Functions
 # ======================
+
+def effective_config():
+    """Return the settings AVC.py will actually use (built-ins after the config
+    file has been applied). Exposed via --print-config for the launcher."""
+    return {
+        'sysId': sysId,
+        'broker': KAFKA_BROKER,
+        'topic': KAFKA_TOPIC,
+        'interval': MODULE_INTERVAL,
+        'bands': SCAN_BANDS,
+        'channels': SCAN_CHANNELS,
+        'spool_file': KAFKA_SPOOL_FILE,
+        'connect_timeout_ms': KAFKA_CONNECT_TIMEOUT_MS,
+        'send_timeout': KAFKA_SEND_TIMEOUT,
+    }
+
+def load_config(config_file=CONFIG_FILE):
+    """Override the built-in defaults from a JSON config file, if present.
+
+    Command-line flags still take precedence: this only changes the defaults
+    that parse_arguments() and the rest of the module start from. Unknown keys
+    and bad values are ignored so a partial or hand-edited file is safe.
+    Warnings go to stderr to keep --print-config output clean JSON.
+    """
+    global sysId, MODULE_INTERVAL, SCAN_BANDS, SCAN_CHANNELS, KAFKA_BROKER
+    global KAFKA_TOPIC, KAFKA_SPOOL_FILE, KAFKA_CONNECT_TIMEOUT_MS, KAFKA_SEND_TIMEOUT
+
+    if not os.path.isfile(config_file):
+        return {}
+    try:
+        with open(config_file) as f:
+            cfg = json.load(f)
+        if not isinstance(cfg, dict):
+            print(f"[!] Ignoring '{config_file}': expected a JSON object.", file=sys.stderr)
+            return {}
+    except Exception as e:
+        print(f"[!] Could not read config '{config_file}': {e}", file=sys.stderr)
+        return {}
+
+    def _as_int(value):
+        return int(value)  # may raise; caller guards
+
+    if 'sysId' in cfg:
+        sysId = str(cfg['sysId'])
+    if 'broker' in cfg:
+        KAFKA_BROKER = str(cfg['broker'])
+    if 'topic' in cfg:
+        KAFKA_TOPIC = str(cfg['topic'])
+    if 'spool_file' in cfg:
+        KAFKA_SPOOL_FILE = str(cfg['spool_file'])
+    if isinstance(cfg.get('bands'), list):
+        SCAN_BANDS = [str(b) for b in cfg['bands']]
+    if isinstance(cfg.get('channels'), list):
+        SCAN_CHANNELS = [str(c) for c in cfg['channels']]
+    for key, setter in (('interval', 'MODULE_INTERVAL'),
+                        ('connect_timeout_ms', 'KAFKA_CONNECT_TIMEOUT_MS'),
+                        ('send_timeout', 'KAFKA_SEND_TIMEOUT')):
+        if key in cfg:
+            try:
+                globals()[setter] = _as_int(cfg[key])
+            except (TypeError, ValueError):
+                print(f"[!] Ignoring config '{key}': expected an integer.", file=sys.stderr)
+    return cfg
 
 def parse_arguments():
     """Parse command-line arguments."""
@@ -80,8 +151,10 @@ Examples:
 
     # Output Configuration
     output_group = parser.add_argument_group('Output Configuration')
-    output_group.add_argument('-b', '--broker', type=str, default=None, metavar='BROKER',
-                              help='Kafka broker address (ip:port), e.g., 192.168.1.100:9092')
+    output_group.add_argument('-b', '--broker', type=str, default=None, nargs='?', const=KAFKA_BROKER,
+                              metavar='BROKER',
+                              help=f'Publish to Kafka. Bare -b uses the configured broker '
+                                   f'({KAFKA_BROKER}); pass ip:port to override, e.g. 192.168.1.100:9092')
     output_group.add_argument('-lo', '--local', action='store_true', dest='local',
                               help='Save hashes to local "hashes" folder (default if neither -lo nor -b specified)')
 
@@ -89,6 +162,11 @@ Examples:
     scan_group = parser.add_argument_group('Scan Configuration')
     scan_group.add_argument('-i', '--interval', type=int, default=MODULE_INTERVAL, metavar='SECONDS',
                             help=f'Scan interval in seconds (default: {MODULE_INTERVAL})')
+
+    # Configuration
+    config_group = parser.add_argument_group('Configuration')
+    config_group.add_argument('-P', '--print-config', action='store_true', dest='print_config',
+                              help='Print the effective configuration as JSON and exit')
 
     return parser.parse_args()
 
@@ -447,13 +525,18 @@ def main(interval, broker, use_local, use_kafka, auto_config):
     # Start AngryOxide subprocess
     print(f"[*] Starting AngryOxide on {selected_interface}...")
     angryoxide_cmd = ['sudo', 'angryoxide', '-i', selected_interface, '-r', '3', '--headless', '--notar']
-    # Scan every channel the interface supports across all configured bands
-    # rather than a fixed 2.4 GHz list. AngryOxide expands each --band to the
-    # interface's capable channels and ignores bands the card cannot use.
-    for band in SCAN_BANDS:
-        angryoxide_cmd.extend(['--band', band])
-    band_names = {'2': '2.4 GHz', '5': '5 GHz', '6': '6 GHz', '60': '60 GHz'}
-    print(f"[*] Scanning all capable channels in bands: {', '.join(band_names.get(b, b) for b in SCAN_BANDS)}")
+    if SCAN_CHANNELS:
+        # An explicit channel list overrides whole-band scanning.
+        angryoxide_cmd.extend(['-c', ','.join(SCAN_CHANNELS)])
+        print(f"[*] Targeting channels: {','.join(SCAN_CHANNELS)}")
+    else:
+        # Scan every channel the interface supports across all configured bands.
+        # AngryOxide expands each --band to the interface's capable channels and
+        # ignores bands the card cannot use.
+        for band in SCAN_BANDS:
+            angryoxide_cmd.extend(['--band', band])
+        band_names = {'2': '2.4 GHz', '5': '5 GHz', '6': '6 GHz', '60': '60 GHz'}
+        print(f"[*] Scanning all capable channels in bands: {', '.join(band_names.get(b, b) for b in SCAN_BANDS)}")
     # --whitelist loads a file; the -w short flag takes a single MAC/SSID instead.
     if os.path.isfile(WHITELIST_FILE):
         angryoxide_cmd.extend(['--whitelist', WHITELIST_FILE])
@@ -471,7 +554,11 @@ def main(interval, broker, use_local, use_kafka, auto_config):
     publisher = None
     if use_kafka:
         print(f"[*] Kafka broker: {broker} (topic '{KAFKA_TOPIC}')")
-        publisher = KafkaPublisher(broker)
+        # Pass the (config-resolved) globals explicitly; the __init__ defaults
+        # were bound before load_config() ran.
+        publisher = KafkaPublisher(broker, topic=KAFKA_TOPIC, spool_path=KAFKA_SPOOL_FILE,
+                                   connect_timeout_ms=KAFKA_CONNECT_TIMEOUT_MS,
+                                   send_timeout=KAFKA_SEND_TIMEOUT)
         # Drain anything left over from a previous run before we start capturing.
         publisher.flush()
     if use_local and use_kafka:
@@ -547,7 +634,14 @@ def main(interval, broker, use_local, use_kafka, auto_config):
 
 if __name__ == "__main__":
     try:
+        # Config file first so it seeds argparse defaults; CLI still overrides.
+        load_config()
         args = parse_arguments()
+
+        if args.print_config:
+            print(json.dumps(effective_config(), indent=2))
+            sys.exit(0)
+
         print(WELCOME_MESSAGE)
 
         # Determine output modes (default to local if neither specified)

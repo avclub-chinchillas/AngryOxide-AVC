@@ -16,3 +16,4 @@ __pycache__/
 avc-venv/
 kafka_spool.jsonl
 kafka_spool.jsonl.tmp
+avc.conf

@@ -28,10 +28,11 @@ A whiptail menu that describes both tools and builds their command lines for you
 
 - **AVC** — walks through interface selection, output mode (local / Kafka / both), broker address and scan interval
 - **AVC-CC** — working directory, outfile, cracking mode, credentials file, remote fetching (JSON or typed-in host + SSH credentials), check interval, notification count and process name
+- **Config** — edit the persistent settings in `avc.conf`: Kafka broker address/port, topic, band targeting (2.4 / 5 / 6 / 60 GHz), explicit channel list, system ID, default scan interval, and the Kafka resilience tunables — plus view the effective config and reset to defaults (see [Configuration](#configuration-avcconf))
 - **About** — full description of what each tool does, what it needs, and what it writes
 - **Status** — angryoxide and hashcat presence, venv health, wireless interfaces, whitelist entries, hash file counts
 
-Every input is validated as you type, and the exact command is shown for confirmation before anything runs. The launcher re-runs itself under `sudo`, runs the tools from the project directory inside `avc-venv`, and returns to the menu when a tool exits.
+Every input is validated as you type, and the exact command is shown for confirmation before anything runs. The AVC launch dialogs pre-fill their defaults (broker, interval) from your saved configuration. The launcher re-runs itself under `sudo`, runs the tools from the project directory inside `avc-venv`, and returns to the menu when a tool exits.
 
 It runs the selected tool in the current terminal by default, so it works over SSH. When a desktop session and a terminal emulator are available (gnome-terminal, xfce4-terminal, mate-terminal, lxterminal, konsole or xterm) it offers to open a separate window instead.
 
@@ -94,12 +95,16 @@ Each hashline is reported once per run — de-duplication is by hashline rather 
 ### Command-Line Options
 
 ```
--b, --broker BROKER       Kafka broker address (ip:port), e.g., 192.168.1.100:9092
--i, --interval SECONDS    Scan interval in seconds (default: 5)
+-b, --broker [BROKER]     Publish to Kafka. Bare -b uses the configured broker;
+                          pass ip:port to override, e.g. 192.168.1.100:9092
+-i, --interval SECONDS    Scan interval in seconds (default: 5, or avc.conf)
 -a, --auto [CONFIG.JSON]  Auto-select interface from JSON config file (default: interfaces.json)
 -lo, --local              Save hashes to local "hashes" folder (default if no -b)
+-P, --print-config        Print the effective configuration as JSON and exit
 -h, --help                Show help message
 ```
+
+Persistent defaults for the broker, bands/channels, topic, `sysId` and more live in `avc.conf` — see [Configuration](#configuration-avcconf).
 
 ### Examples
 
@@ -160,26 +165,52 @@ AA:BB:CC:DD:EE:FF
 
 The file is passed to AngryOxide with `--whitelist`. If it is missing, AVC.py says so and starts without a whitelist rather than letting AngryOxide abort. Change the path with the `WHITELIST_FILE` constant in `AVC.py`.
 
-### Fixed AngryOxide Settings
+### Channel & Band Targeting
 
-AVC.py launches AngryOxide with a fixed argument set. To change any of these, edit the `angryoxide_cmd` list in `AVC.py`:
+By default AVC.py scans the **2.4, 5 and 6 GHz** bands. It passes `--band 2 --band 5 --band 6` to AngryOxide, which expands each band to **every channel the interface is actually capable of** (read from nl80211) and ignores bands the card does not support — so scanning follows the hardware, not a fixed list.
 
-- Bands: `--band 2 --band 5 --band 6` — 2.4, 5 and 6 GHz. AngryOxide expands each band to **every channel the interface is actually capable of** (read from nl80211) and ignores bands the card does not support, so scanning follows the hardware instead of a fixed channel list.
+This is configurable (see [Configuration](#configuration-avcconf)):
+
+- **`bands`** — AngryOxide band IDs `2` = 2.4 GHz, `5` = 5 GHz, `6` = 6 GHz, `60` = 60 GHz. Restrict scanning with e.g. `["2"]` (2.4 only) or `["5", "6"]` (skip 2.4).
+- **`channels`** — an explicit channel list (e.g. `["1","6","11","36"]`) passed as `-c`. When set, it **overrides** band scanning entirely. Leave empty to scan by band.
+
+The other AngryOxide arguments are fixed in the `angryoxide_cmd` list in `AVC.py`:
+
 - Attack rate: `-r 3` (most aggressive)
 - Mode: `--headless --notar` (no TUI, no tarball of output files)
 - Whitelist: `--whitelist whitelist.txt` (when the file exists)
 
-The scanned bands are the `SCAN_BANDS` constant near the top of `AVC.py` (AngryOxide band IDs: `2` = 2.4 GHz, `5` = 5 GHz, `6` = 6 GHz, `60` = 60 GHz). Trim it to restrict scanning — e.g. `['2']` for 2.4 GHz only, or `['5', '6']` to skip 2.4 GHz. 60 GHz (802.11ad) is intentionally left out.
+No `-o` prefix is passed, so captures use AngryOxide's default `oxide` prefix — which is what `cleanup.sh` expects to find. The archive folder is the `ARCHIVE_DIR` constant (default: `hashes`).
 
-No `-o` prefix is passed, so captures use AngryOxide's default `oxide` prefix — which is what `cleanup.sh` expects to find.
+### Configuration (avc.conf)
 
-The Kafka `sysId` value is the `sysId` constant near the top of `AVC.py` (default: `Attack1`), and the archive folder is the `ARCHIVE_DIR` constant (default: `hashes`).
+Persistent settings live in **`avc.conf`** (JSON) in the project directory. AVC.py reads it at startup to override its built-in defaults; **command-line flags still take precedence** over the config. Edit it through the launcher's **Config** menu (`sudo ./avc-launcher.sh`) or by hand. It is optional — with no file, AVC.py uses its built-in defaults.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `broker` | `localhost:9092` | Default Kafka broker `ip:port` (used by bare `-b`; the launcher pre-fills its broker prompt from this) |
+| `topic` | `wifi-hash` | Kafka topic |
+| `sysId` | `Attack1` | Identifier sent in every message as `sysId` |
+| `interval` | `5` | Default scan interval in seconds (the `-i` flag overrides) |
+| `bands` | `["2","5","6"]` | Bands to scan (see above) |
+| `channels` | `[]` | Explicit channels; overrides `bands` when non-empty |
+| `spool_file` | `kafka_spool.jsonl` | Offline-queue spool file |
+| `connect_timeout_ms` | `5000` | Max time to block establishing/using the Kafka producer |
+| `send_timeout` | `10` | Seconds to wait for each message's broker acknowledgement |
+
+Inspect the effective configuration (built-ins merged with `avc.conf`) at any time:
+
+```bash
+python3 AVC.py --print-config
+```
+
+Kafka is still enabled per run by the `-b` flag: bare `-b` publishes to the configured `broker`, and `-b ip:port` overrides it for that run. `avc.conf` is git-ignored so per-deployment broker addresses and rig IDs stay out of version control.
 
 ### Kafka Output Format
 
 Hashes are published to the `wifi-hash` topic (see `kafka_fields.txt`) with the following fields:
 
-- `sysId`: System identifier (hardcoded constant in `AVC.py`)
+- `sysId`: System identifier (configurable via `avc.conf`, default `Attack1`)
 - `timestamp`: Time the hash was read, `YYYY-MM-DD HH:MM:SS`
 - `essid`: Network SSID, parsed from the hash filename — sanitized by AngryOxide, so spaces and `:/\|?*<>"+` become `_`
 - `bssid`: Access point MAC, parsed from the hash filename — 12 lowercase hex characters with no separators (e.g. `aabbccddeeff`), or `unknown` if the filename has no `_`
