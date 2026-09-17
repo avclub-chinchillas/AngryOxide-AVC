@@ -49,7 +49,7 @@ entry=brightgreen,black
 compactbutton=black,green
 '
 
-TITLE=" AngryOxide-AVClub Launcher v1.0 by @dr0pp1n "
+TITLE=" AngryOxide-AVClub Launcher v1.1 by @dr0pp1n "
 
 # ── Escalate to root once (the tools need it, and so do spawned terminals) ────
 
@@ -174,6 +174,100 @@ else:
     cfg[key] = vals[0] if vals else ""
 with open(path, 'w') as f:
     json.dump(cfg, f, indent=2)
+    f.write('\n')
+PY
+}
+
+# ── interfaces.json helpers (auto-select interface list) ─────────────────────
+
+INTERFACES_FILE="$PROJECT_DIR/interfaces.json"
+
+ifaces_get() {   # print current interfaces, one per line, in priority order
+    "$VENV_PY" - "$INTERFACES_FILE" <<'PY'
+import json, os, sys
+p = sys.argv[1]; data = []
+if os.path.isfile(p):
+    try:
+        d = json.load(open(p))
+        if isinstance(d, dict):   data = d.get('interfaces', [])
+        elif isinstance(d, list): data = d
+    except Exception: data = []
+for x in data:
+    print(x)
+PY
+}
+
+ifaces_count() { ifaces_get | grep -c . ; }
+
+ifaces_write() {   # names... -> overwrite interfaces.json as {"interfaces": [...]}
+    "$VENV_PY" - "$INTERFACES_FILE" "$@" <<'PY'
+import json, sys
+p = sys.argv[1]; names = sys.argv[2:]
+with open(p, 'w') as f:
+    json.dump({"interfaces": names}, f, indent=2)
+    f.write('\n')
+PY
+}
+
+detected_wifi_ifaces() {   # nl80211 interface names present on this system
+    iw dev 2>/dev/null | awk '/Interface/{print $2}'
+}
+
+# ── hash-targets.json helpers (remote SCP fetch targets for AVC-CC) ──────────
+
+TARGETS_FILE="$PROJECT_DIR/hash-targets.json"
+
+targets_rows() {   # print "idx<TAB>ip<TAB>filepath<TAB>user" per target
+    "$VENV_PY" - "$TARGETS_FILE" <<'PY'
+import json, os, sys
+p = sys.argv[1]; data = []
+if os.path.isfile(p):
+    try:
+        d = json.load(open(p))
+        if isinstance(d, list): data = d
+        elif isinstance(d, dict) and 'targets' in d: data = d['targets']
+    except Exception: data = []
+for i, t in enumerate(data):
+    if isinstance(t, dict):
+        print("%d\t%s\t%s\t%s" % (i, t.get('ip', ''), t.get('filepath', ''), t.get('username', '')))
+PY
+}
+
+targets_count() { targets_rows | grep -c . ; }
+
+targets_add() {   # ip filepath user password -> append one target
+    "$VENV_PY" - "$TARGETS_FILE" "$@" <<'PY'
+import json, os, sys
+p, ip, fp, user, pw = sys.argv[1:6]
+data = []
+if os.path.isfile(p):
+    try:
+        d = json.load(open(p))
+        if isinstance(d, list): data = d
+        elif isinstance(d, dict) and 'targets' in d: data = d['targets']
+    except Exception: data = []
+data.append({"ip": ip, "filepath": fp, "username": user, "password": pw})
+with open(p, 'w') as f:
+    json.dump(data, f, indent=2)
+    f.write('\n')
+PY
+}
+
+targets_remove() {   # index -> delete that target
+    "$VENV_PY" - "$TARGETS_FILE" "$1" <<'PY'
+import json, os, sys
+p = sys.argv[1]; idx = int(sys.argv[2])
+data = []
+if os.path.isfile(p):
+    try:
+        d = json.load(open(p))
+        if isinstance(d, list): data = d
+        elif isinstance(d, dict) and 'targets' in d: data = d['targets']
+    except Exception: data = []
+if 0 <= idx < len(data):
+    del data[idx]
+with open(p, 'w') as f:
+    json.dump(data, f, indent=2)
     f.write('\n')
 PY
 }
@@ -558,35 +652,230 @@ configure_avc_cc() {
     WORKDIR="$saved_workdir"
 }
 
+# ── interfaces.json editor ───────────────────────────────────────────────────
+
+edit_interfaces() {
+    while true; do
+        local count; count="$(ifaces_count)"
+        local choice
+        choice=$(whiptail --title " Config — interfaces.json " --menu \
+"\nPriority-ordered list AVC.py tries in auto-select mode (-a): the first\nentry present on the system is used. Currently $count listed.\n" \
+            "$H" "$W" 4 \
+            "add"    "Add an interface (detected or typed)" \
+            "remove" "Remove an interface" \
+            "view"   "View the list and detected interfaces" \
+            "back"   "Back" \
+            3>&1 1>&2 2>&3) || return 0
+        case "$choice" in
+            add)     ifaces_add_flow ;;
+            remove)  ifaces_remove_flow ;;
+            view)    ifaces_view ;;
+            back|"") return 0 ;;
+        esac
+    done
+}
+
+ifaces_add_flow() {
+    local -a cur detected items=() add=()
+    mapfile -t cur < <(ifaces_get)
+    mapfile -t detected < <(detected_wifi_ifaces)
+
+    # Offer detected interfaces that are not already listed.
+    local d c present
+    for d in ${detected[@]+"${detected[@]}"}; do
+        present=0
+        for c in ${cur[@]+"${cur[@]}"}; do [[ "$c" == "$d" ]] && present=1; done
+        [[ $present -eq 0 ]] && items+=("$d" "detected, not yet listed" OFF)
+    done
+
+    local choice="manual"
+    if [[ ${#items[@]} -gt 0 ]]; then
+        choice=$(whiptail --title " Add interface " --menu \
+"\nAdd from the detected interfaces, or type a name.\n" "$H" "$W" 2 \
+            "detected" "Choose from detected interfaces" \
+            "manual"   "Type an interface name" \
+            3>&1 1>&2 2>&3) || return 0
+    fi
+
+    case "$choice" in
+        detected)
+            local sel
+            sel=$(whiptail --title " Add interface " --checklist \
+"\nSelect interfaces to add (SPACE toggles, ENTER confirms):\n" "$H" "$W" 6 \
+                "${items[@]}" 3>&1 1>&2 2>&3) || return 0
+            read -ra add <<< "$(echo "$sel" | tr -d '"')"
+            [[ ${#add[@]} -eq 0 ]] && return 0
+            cur+=("${add[@]}")
+            ;;
+        manual)
+            local name
+            name=$(ask_input " Add interface " \
+"\nInterface name to add (e.g. wlan0, wlan1mon):\n" "" \
+                '^[A-Za-z0-9._-]+$' "Enter a valid interface name.") || return 0
+            [[ -z "$name" ]] && return 0
+            for c in ${cur[@]+"${cur[@]}"}; do
+                [[ "$c" == "$name" ]] && { msg " Already listed " "\n$name is already in the list." 9; return 0; }
+            done
+            cur+=("$name")
+            ;;
+        *) return 0 ;;
+    esac
+    ifaces_write ${cur[@]+"${cur[@]}"}
+}
+
+ifaces_remove_flow() {
+    local -a cur items=()
+    mapfile -t cur < <(ifaces_get)
+    if [[ ${#cur[@]} -eq 0 ]]; then
+        msg " Remove interface " "\nThe list is empty — nothing to remove." 9
+        return 0
+    fi
+    local c i=0
+    for c in "${cur[@]}"; do items+=("$c" "priority $((++i))"); done
+    local pick
+    pick=$(whiptail --title " Remove interface " --menu \
+"\nSelect an interface to remove from the list:\n" "$H" "$W" 8 \
+        "${items[@]}" 3>&1 1>&2 2>&3) || return 0
+    local -a new=()
+    for c in "${cur[@]}"; do [[ "$c" == "$pick" ]] || new+=("$c"); done
+    ifaces_write ${new[@]+"${new[@]}"}
+}
+
+ifaces_view() {
+    local tmp; tmp="$(mktemp)"
+    {
+        echo "File: $INTERFACES_FILE"
+        echo ""
+        echo "Auto-select order (first present wins):"
+        local i=0 c
+        while IFS= read -r c; do [[ -n "$c" ]] && echo "  $((++i)). $c"; done < <(ifaces_get)
+        [[ $i -eq 0 ]] && echo "  (empty — auto-select will find nothing)"
+        echo ""
+        echo "Wireless interfaces detected on this system:"
+        local d found=0
+        while IFS= read -r d; do [[ -n "$d" ]] && { echo "  - $d"; found=1; }; done < <(detected_wifi_ifaces)
+        [[ $found -eq 0 ]] && echo "  (none detected)"
+    } > "$tmp"
+    textfile " interfaces.json " "$tmp"
+    rm -f "$tmp"
+}
+
+# ── hash-targets.json editor ─────────────────────────────────────────────────
+
+edit_targets() {
+    while true; do
+        local count; count="$(targets_count)"
+        local choice
+        choice=$(whiptail --title " Config — hash-targets.json " --menu \
+"\nRemote hosts AVC-CC fetches cracked-password files from over SCP (-r).\nCurrently $count target(s). Passwords are stored in plain text.\n" \
+            "$H" "$W" 4 \
+            "add"    "Add a remote target" \
+            "remove" "Remove a target" \
+            "view"   "View targets (passwords hidden)" \
+            "back"   "Back" \
+            3>&1 1>&2 2>&3) || return 0
+        case "$choice" in
+            add)     targets_add_flow ;;
+            remove)  targets_remove_flow ;;
+            view)    targets_view ;;
+            back|"") return 0 ;;
+        esac
+    done
+}
+
+targets_add_flow() {
+    local ip fp user pass
+    ip=$(ask_input " Add target — host " \
+"\nRemote host IP or hostname:\n" "" \
+        '^[A-Za-z0-9._-]+$' "Enter a host or IP address.") || return 0
+    [[ -z "$ip" ]] && return 0
+    fp=$(ask_input " Add target — file " \
+"\nAbsolute path to the hashcat results file on $ip:\n" "/path/to/results.txt" \
+        '^/.+' "Enter an absolute path starting with /.") || return 0
+    user=$(ask_input " Add target — user " \
+"\nSSH username for $ip:\n" "" \
+        '^[^[:space:]:]+$' "Enter a username with no spaces or colons.") || return 0
+    pass=$(ask_password " Add target — password " "\nSSH password for ${user}@${ip}:") || return 0
+    targets_add "$ip" "$fp" "$user" "$pass"
+    msg " Saved " "\nAdded target ${user}@${ip}:${fp}" 10
+}
+
+targets_remove_flow() {
+    local -a items=()
+    local idx ip fp user
+    while IFS=$'\t' read -r idx ip fp user; do
+        [[ -n "$idx" ]] || continue
+        items+=("$idx" "${user}@${ip}:${fp}")
+    done < <(targets_rows)
+    if [[ ${#items[@]} -eq 0 ]]; then
+        msg " Remove target " "\nNo targets to remove." 9
+        return 0
+    fi
+    local pick
+    pick=$(whiptail --title " Remove target " --menu \
+"\nSelect a target to remove:\n" "$H" "$W" 8 \
+        "${items[@]}" 3>&1 1>&2 2>&3) || return 0
+    targets_remove "$pick"
+}
+
+targets_view() {
+    local tmp; tmp="$(mktemp)"
+    {
+        echo "File: $TARGETS_FILE"
+        echo ""
+        "$VENV_PY" - "$TARGETS_FILE" <<'PY'
+import json, os, sys
+p = sys.argv[1]; data = []
+if os.path.isfile(p):
+    try:
+        d = json.load(open(p))
+        data = d if isinstance(d, list) else d.get('targets', [])
+    except Exception: data = []
+if not data:
+    print("(no targets configured)")
+for i, t in enumerate(data):
+    print("%d. %s@%s:%s  (password: %s)" % (
+        i, t.get('username', ''), t.get('ip', ''), t.get('filepath', ''),
+        'set' if t.get('password') else 'empty'))
+PY
+    } > "$tmp"
+    textfile " Remote targets " "$tmp"
+    rm -f "$tmp"
+}
+
 # ── Configuration menu ───────────────────────────────────────────────────────
 
 configure_settings() {
     while true; do
         cfg_refresh
         local choice
-        choice=$(whiptail --title " AVC — configuration (avc.conf) " --menu \
-"\nPersistent defaults AVC.py reads at startup. Command-line flags still\noverride these per run. Current value shown in [brackets].\n" \
-            "$H" "$W" 9 \
-            "broker"    "Kafka broker address:port   [$(cfg_get broker)]" \
-            "topic"     "Kafka topic                 [$(cfg_get topic)]" \
-            "bands"     "Band targeting              [$(cfg_get_list bands)]" \
-            "channels"  "Explicit channels           [$(cfg_get_list channels)]" \
-            "sysid"     "System ID (Kafka sysId)     [$(cfg_get sysId)]" \
-            "interval"  "Default scan interval (s)   [$(cfg_get interval)]" \
-            "advanced"  "Advanced Kafka tunables ..." \
-            "view"      "View full configuration" \
-            "reset"     "Reset all settings to defaults" \
+        choice=$(whiptail --title " AVC — configuration " --menu \
+"\navc.conf holds AVC.py's defaults (CLI flags still override per run).\nThe two JSON files feed auto-select and remote cracking. [current shown]\n" \
+            "$H" "$W" 11 \
+            "broker"     "Kafka broker address:port   [$(cfg_get broker)]" \
+            "topic"      "Kafka topic                 [$(cfg_get topic)]" \
+            "bands"      "Band targeting              [$(cfg_get_list bands)]" \
+            "channels"   "Explicit channels           [$(cfg_get_list channels)]" \
+            "sysid"      "System ID (Kafka sysId)     [$(cfg_get sysId)]" \
+            "interval"   "Default scan interval (s)   [$(cfg_get interval)]" \
+            "advanced"   "Advanced Kafka tunables ..." \
+            "interfaces" "Auto-select interfaces (interfaces.json)  [$(ifaces_count)]" \
+            "targets"    "Remote crack targets (hash-targets.json)  [$(targets_count)]" \
+            "view"       "View full avc.conf configuration" \
+            "reset"      "Reset avc.conf to defaults" \
             3>&1 1>&2 2>&3) || return 0
         case "$choice" in
-            broker)   cfg_edit_broker ;;
-            topic)    cfg_edit_topic ;;
-            bands)    cfg_edit_bands ;;
-            channels) cfg_edit_channels ;;
-            sysid)    cfg_edit_sysid ;;
-            interval) cfg_edit_interval ;;
-            advanced) cfg_edit_advanced ;;
-            view)     cfg_view ;;
-            reset)    cfg_reset ;;
+            broker)     cfg_edit_broker ;;
+            topic)      cfg_edit_topic ;;
+            bands)      cfg_edit_bands ;;
+            channels)   cfg_edit_channels ;;
+            sysid)      cfg_edit_sysid ;;
+            interval)   cfg_edit_interval ;;
+            advanced)   cfg_edit_advanced ;;
+            interfaces) edit_interfaces ;;
+            targets)    edit_targets ;;
+            view)       cfg_view ;;
+            reset)      cfg_reset ;;
         esac
     done
 }

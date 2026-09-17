@@ -28,7 +28,7 @@ A whiptail menu that describes both tools and builds their command lines for you
 
 - **AVC** — walks through interface selection, output mode (local / Kafka / both), broker address and scan interval
 - **AVC-CC** — working directory, outfile, cracking mode, credentials file, remote fetching (JSON or typed-in host + SSH credentials), check interval, notification count and process name
-- **Config** — edit the persistent settings in `avc.conf`: Kafka broker address/port, topic, band targeting (2.4 / 5 / 6 / 60 GHz), explicit channel list, system ID, default scan interval, and the Kafka resilience tunables — plus view the effective config and reset to defaults (see [Configuration](#configuration-avcconf))
+- **Config** — edit the persistent settings in `avc.conf`: Kafka broker address/port, topic, band targeting (2.4 / 5 / 6 / 60 GHz), explicit channel list, system ID, default scan interval, and the Kafka resilience tunables — plus view the effective config and reset to defaults (see [Configuration](#configuration-avcconf)). It also edits the two JSON files: **interfaces.json** (add/remove auto-select interfaces, choosing from detected adapters or typing a name) and **hash-targets.json** (add/remove AVC-CC remote SCP targets, with hidden password entry)
 - **About** — full description of what each tool does, what it needs, and what it writes
 - **Status** — angryoxide and hashcat presence, venv health, wireless interfaces, whitelist entries, hash file counts
 
@@ -136,7 +136,7 @@ python3 AVC.py -b 192.168.1.100:9092 -lo
 
 ### Interface Configuration
 
-Edit `interfaces.json` to configure which interfaces to use with auto-select mode:
+Edit `interfaces.json` to configure which interfaces to use with auto-select mode (or manage it from the launcher's **Config → interfaces** menu):
 
 ```json
 {
@@ -440,7 +440,7 @@ Corporate:P@ssw0rd!
 
 ### Remote Configuration (hash-targets.json)
 
-Edit `hash-targets.json` to configure remote targets:
+Edit `hash-targets.json` to configure remote targets (or manage it from the launcher's **Config → targets** menu):
 
 ```json
 [
