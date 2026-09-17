@@ -29,7 +29,7 @@ zsh_completion_script="completions/zsh_angryoxide_completions"
 
 RUSTUP_HOME_SYSTEM="/usr/local/rustup"
 CARGO_HOME_SYSTEM="/usr/local/cargo"
-MIN_RUST_VERSION="1.70"  # see rust-version in Cargo.toml
+MIN_RUST_VERSION="1.87"  # see rust-version in Cargo.toml (u32::is_multiple_of)
 
 APT_RUNTIME=(python3 python3-venv python3-pip sshpass wireless-tools iw curl whiptail)
 APT_BUILD=(build-essential pkg-config libssl-dev git)
@@ -244,23 +244,35 @@ ensure_rust_toolchain() {
         info "No Rust toolchain found."
     fi
 
-    # Distro packages first - no piping a script from the network.
-    if ! package_installed cargo; then
+    # Distro packages are almost always older than the required $MIN_RUST_VERSION
+    # (Debian/Ubuntu stable ship well behind), so only try apt when it could
+    # plausibly satisfy the floor - otherwise go straight to rustup rather than
+    # installing an old toolchain that gets discarded.
+    if apt_cargo_could_satisfy && ! package_installed cargo; then
         apt_update_once
         info "Installing Rust from apt (rustc, cargo)..."
         apt-get install -y rustc cargo &> /dev/null
-    fi
-
-    if detect_cargo; then
-        version="$(cargo_version)"
-        if [[ -n "$version" ]] && version_at_least "$version" "$MIN_RUST_VERSION"; then
-            ok "Rust toolchain installed: cargo $version ($CARGO_BIN)"
-            return 0
+        if detect_cargo; then
+            version="$(cargo_version)"
+            if [[ -n "$version" ]] && version_at_least "$version" "$MIN_RUST_VERSION"; then
+                ok "Rust toolchain installed: cargo $version ($CARGO_BIN)"
+                return 0
+            fi
+            warn "apt provides cargo ${version:-unknown}, older than the required $MIN_RUST_VERSION."
         fi
-        warn "apt provides cargo ${version:-unknown}, older than the required $MIN_RUST_VERSION."
     fi
 
     install_rustup
+}
+
+# True when the apt-provided cargo might meet the version floor. Cheap probe of
+# the candidate version so we don't install a toolchain we know is too old.
+apt_cargo_could_satisfy() {
+    local cand
+    cand="$(apt-cache policy cargo 2>/dev/null | awk '/Candidate:/{print $2}')"
+    # Candidate strings look like "1.75.0ubuntu1~..."; grab the leading x.y.z.
+    cand="$(grep -oE '^[0-9]+\.[0-9]+(\.[0-9]+)?' <<< "$cand")"
+    [[ -n "$cand" ]] && version_at_least "$cand" "$MIN_RUST_VERSION"
 }
 
 # ======================

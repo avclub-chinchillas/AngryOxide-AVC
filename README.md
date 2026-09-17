@@ -224,7 +224,7 @@ One command does everything: apt packages, the Rust toolchain, the build, the bi
 | Build | `build-essential`, `pkg-config`, `libssl-dev`, `git` | Install aborts |
 | Optional | `hashcat`, `wordlists` (for `AVC-CC.py` cracking) | Warns and continues |
 
-**2. Rust toolchain** — reuses any cargo already on the system (including one installed under the invoking user's `~/.cargo`) as long as it meets the `rust-version = 1.70` floor from `Cargo.toml`. Otherwise it installs `rustc`/`cargo` from apt, and if the distro's version is still too old it falls back to a system-wide rustup install under `/usr/local/rustup`, symlinked into `/usr/local/bin` with `RUSTUP_HOME` exported from `/etc/profile.d/rust-avc.sh`.
+**2. Rust toolchain** — reuses any cargo already on the system (including one installed under the invoking user's `~/.cargo`) as long as it meets the `rust-version = 1.87` floor from `Cargo.toml`. The build needs **Rust 1.87 or newer** (the code uses `u32::is_multiple_of`, stabilized in 1.87, plus `Option::is_none_or` and `std::iter::repeat_n` from 1.82). Distro packages are almost always older than that, so unless the apt candidate already satisfies the floor the installer skips apt and installs a current toolchain via rustup — system-wide under `/usr/local/rustup`, symlinked into `/usr/local/bin`, with `RUSTUP_HOME` exported from `/etc/profile.d/rust-avc.sh`. To build by hand you need the same: `rustup update stable`, or any toolchain ≥ 1.87.
 
 **3. Build** — `cargo build --release`. The first build takes several minutes; later runs are incremental no-ops. When the build runs as root, `target/` is handed back to the invoking user afterwards so you can run cargo yourself later.
 
