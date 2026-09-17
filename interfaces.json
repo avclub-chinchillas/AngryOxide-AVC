@@ -1,0 +1,3 @@
+{
+  "interfaces": ["wlan0", "wlan1", "wlan2"]
+}

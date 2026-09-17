@@ -1,0 +1,14 @@
+[
+  {
+    "ip": "192.168.1.100",
+    "filepath": "/path/to/hashcat/results.txt",
+    "username": "user",
+    "password": "password"
+  },
+  {
+    "ip": "192.168.1.101",
+    "filepath": "/path/to/hashcat/results.txt",
+    "username": "user",
+    "password": "password"
+  }
+]
